@@ -7,8 +7,16 @@
 - `app/`：STM32F105 App，负责 EC800、MQTT、CAN 控制器状态机和 Boot V2 OTA 下载。
 - `boot/`：Boot V2，只负责安装、试运行确认与回滚，不联网下载。
 - `docs/vendor/`：厂家 CAN/控制器资料，仅作为设备端帧依据。
-- `docs/protocols/`：A-BOX 与平台公共协议归档。
+- `docs/protocols/`：公共业务协议及独立的 A-BOX 内部运维协议归档。
 - `dist/`：正式本地构建产物及校验清单。
+
+## MQTT 接口边界
+
+- 公共业务：顶飞翼控制、主动状态和心跳，供业务平台对接。
+- 内部运维：设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA，只供 OTA 平台使用。
+- 不支持：格口映射、试开通道、锁板、RS485 和旧桌面上位机协议。
+
+内部 Topic、报文和 OTA 状态语义见 [顶飞翼 A-BOX 内部运维协议](docs/protocols/顶飞翼A-BOX内部运维协议-1.0.md)。
 
 ## CAN
 

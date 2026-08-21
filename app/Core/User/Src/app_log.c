@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "lockctrl_diag.h"
+#include "app_diag.h"
 #include "main.h"
 #include "time_base.h"
 #if LOCKCTRL_EC800_AT_DIAG_UART5

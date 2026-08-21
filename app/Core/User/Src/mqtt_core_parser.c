@@ -2,7 +2,7 @@
 #include <string.h>
 
 #include "app_log.h"
-#include "lockctrl_diag.h"
+#include "app_diag.h"
 #include "main.h"
 #include "mqtt_core_int.h"
 #include "time_base.h"

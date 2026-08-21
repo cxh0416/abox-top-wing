@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "app_log.h"
-#include "lockctrl_diag.h"
+#include "app_diag.h"
 #include "mqtt_core.h"
 
 #define EC800_AT_ABORT_GUARD_MS 1500U

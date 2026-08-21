@@ -27,10 +27,11 @@ void MQTT_App_HandleStatusReportTask(void)
     static uint32_t last_tick;static uint8_t was_ready;static WingReportReason pending;
     uint32_t now=HAL_GetTick();const WingSnapshot* s=WingController_GetSnapshot();WingReportReason r;char ts[21],rid[40];cJSON *root=0,*data=0;
     while((r=WingController_TakeReportReason())!=WING_REPORT_NONE)pending=r;
-    if(MQTT_Core_IsReady()&&!was_ready)pending=WING_REPORT_STATE_CHANGED;was_ready=MQTT_Core_IsReady();
+    if(MQTT_Core_IsReady()&&!was_ready)pending=WING_REPORT_STATE_CHANGED;
+    was_ready=MQTT_Core_IsReady();
     if(!pending&&s&&(s->motion_state==WING_MOTION_ASCENDING||s->motion_state==WING_MOTION_DESCENDING||s->motion_state==WING_MOTION_MOVING_UNKNOWN)&&now-last_tick>=1000U)pending=WING_REPORT_STATE_CHANGED;
     if(!pending||!MQTT_Core_IsReady()||MQTT_Core_IsPublishActive()||g_mqtt_app_resp_pending||!TimeBase_FormatUtcMs(ts,sizeof(ts)))return;
-    snprintf(rid,sizeof(rid),"%s-%lu",g_mqtt_app_device_id,(unsigned long)g_mqtt_app_seq_no);root=cJSON_CreateObject();data=cJSON_CreateObject();if(!root||!data)goto done;
+    snprintf(rid,sizeof(rid),"%.24s-%lu",g_mqtt_app_device_id,(unsigned long)g_mqtt_app_seq_no);root=cJSON_CreateObject();data=cJSON_CreateObject();if(!root||!data)goto done;
     cJSON_AddStringToObject(root,"version","2.0");cJSON_AddRawToObject(root,"timestamp",ts);cJSON_AddStringToObject(data,"product","top_flying_wing");cJSON_AddStringToObject(data,"reportId",rid);cJSON_AddStringToObject(data,"reason",WingReportReason_Name(pending));MQTT_App_AddWingSnapshot(data);cJSON_AddItemToObject(root,"data",data);data=0;
     if(cJSON_PrintPreallocated(root,json_buf,sizeof(json_buf),0)&&MQTT_Core_PublishEx(g_mqtt_app_status_report_topic,json_buf,1U,1U)){pending=WING_REPORT_NONE;last_tick=now;g_mqtt_app_seq_no++;}
 done:if(data)cJSON_Delete(data);if(root)cJSON_Delete(root);

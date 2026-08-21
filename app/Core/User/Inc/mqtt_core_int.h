@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "lockctrl_diag.h"
+#include "app_diag.h"
 #include "mqtt_core.h"
 
 #define MQTT_CORE_CMD_BUF_SZ 256U

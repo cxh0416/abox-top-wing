@@ -16,8 +16,8 @@
                           "name":  "TopFlyingWing_App.bin",
                           "size":  67828,
                           "load_address":  "0x08008000",
-                          "crc32":  "ADB915DD",
-                          "sha256":  "8b3ada0820d0bf746c40b7b695fd1f51722cf980deb2623cf956605e1f8306f8",
+                          "crc32":  "F0BE8E81",
+                          "sha256":  "4135616a016e9241729ea8b0d67cb23d56507842b3afd075fe3a9fe5338c490d",
                           "includes_device_config":  false,
                           "includes_boot_state":  false
                       },
@@ -34,8 +34,8 @@
                           "name":  "TopFlyingWing_Full.bin",
                           "size":  100596,
                           "load_address":  "0x08000000",
-                          "crc32":  "9A7BD78A",
-                          "sha256":  "473c900b64aa2bcce00c3f10fa6e16c5ccb3b6116d419a05fcde7a1a735a98c9",
+                          "crc32":  "C77C4CD6",
+                          "sha256":  "889a97d0b48c25028542684603d62ae00cc513d9e179c743e1e3258ecce7de03",
                           "includes_device_config":  false,
                           "includes_boot_state":  false
                       }

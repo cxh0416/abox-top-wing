@@ -1,0 +1,43 @@
+﻿{
+    "manifest_version":  1,
+    "product":  "top_flying_wing",
+    "firmware_version":  "top-flying-wing-1.0.0",
+    "boot_version":  "top-flying-wing-boot-2.2.0",
+    "ota_scheme":  "boot_v2_ufs",
+    "ota_downloader":  "app",
+    "app_range":  "0x08008000..0x0803E7FF",
+    "boot_state_pages":  [
+                             "0x0803E800",
+                             "0x0803F000"
+                         ],
+    "config_page":  "0x0803F800",
+    "artifacts":  [
+                      {
+                          "name":  "TopFlyingWing_App.bin",
+                          "size":  67828,
+                          "load_address":  "0x08008000",
+                          "crc32":  "ADB915DD",
+                          "sha256":  "8b3ada0820d0bf746c40b7b695fd1f51722cf980deb2623cf956605e1f8306f8",
+                          "includes_device_config":  false,
+                          "includes_boot_state":  false
+                      },
+                      {
+                          "name":  "TopFlyingWing_Boot.bin",
+                          "size":  32768,
+                          "load_address":  "0x08000000",
+                          "crc32":  "FC55AA72",
+                          "sha256":  "9fea111dd6a28b256d5923dc6f9d19906b75dde9298d7ed31648fa94408ab33a",
+                          "includes_device_config":  false,
+                          "includes_boot_state":  false
+                      },
+                      {
+                          "name":  "TopFlyingWing_Full.bin",
+                          "size":  100596,
+                          "load_address":  "0x08000000",
+                          "crc32":  "9A7BD78A",
+                          "sha256":  "473c900b64aa2bcce00c3f10fa6e16c5ccb3b6116d419a05fcde7a1a735a98c9",
+                          "includes_device_config":  false,
+                          "includes_boot_state":  false
+                      }
+                  ]
+}

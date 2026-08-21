@@ -1,0 +1,38 @@
+# Keil / MDK generated output
+*.axf
+*.bin
+*.hex
+*.htm
+*.lnp
+*.map
+*.o
+*.d
+*.crf
+*.lst
+*.dep
+*.bak
+*.exe
+JLinkLog.txt
+JLinkSettings.ini
+build_*.log
+app/MDK-ARM/TopFlyingWing_App/
+boot/MDK-ARM/TopFlyingWing_Boot/
+app/MDK-ARM/.vscode/
+boot/MDK-ARM/.vscode/
+*.uvguix.*
+*.uvoptx
+
+# Python / host tool output
+__pycache__/
+*.py[cod]
+build/
+dist/
+out/
+
+# Local editor and OS noise
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.tmp.driveupload/
+tmp/

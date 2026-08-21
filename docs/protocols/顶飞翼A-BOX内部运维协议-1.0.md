@@ -1,7 +1,9 @@
 # 顶飞翼 A-BOX 内部运维协议
 
-版本：1.0  
-适用固件：`top-flying-wing-1.0.0`  
+版本：1.0
+
+适用固件：`top-flying-wing-1.0.0`
+
 产品标识：`top_flying_wing`
 
 ## 1. 协议定位

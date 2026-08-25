@@ -59,7 +59,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/User/Src/abox_product_port.c
     Core/User/Src/app_log.c
     Core/User/Src/board_config.c
-    Core/User/Src/ec800_at.c
     Core/User/Src/mqtt_app.c
     Core/User/Src/mqtt_app_cmd.c
     Core/User/Src/mqtt_app_hb.c
@@ -92,6 +91,7 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
+    abox::ec800
 
     # Add user defined libraries
 )

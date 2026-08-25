@@ -37,6 +37,7 @@
 #include "board_config.h"
 #include "boot_state.h"
 #include "ec800_at.h"
+#include "abox_ec800_rx.h"
 #include "ec_power.h"
 #include "mqtt_app.h"
 #include "mqtt_core.h"
@@ -65,11 +66,15 @@
 static MQTT_CoreConfig_t g_mqtt_cfg = {0};
 static Ec800AtCore_t g_ec800_at;
 
-#define UART1_RX_BUF_SZ 512
-uint8_t uart1_rx_buf[UART1_RX_BUF_SZ];
+#define UART1_RX_BUF_SZ 1088U
+#define UART1_RX_RING_SZ 1152U
+static uint8_t uart1_rx_buf[UART1_RX_BUF_SZ];
+static uint8_t g_uart1_rx_ring[UART1_RX_RING_SZ];
+static ABoxEc800Rx g_ec800_rx;
 
 static uint8_t g_mqtt_start_enable = 0;
 static uint32_t g_ec_restart_tick = 0;
+static uint32_t g_ec800_rx_overflow_reported = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -123,6 +128,38 @@ static void MQTT_ConfigInit(void)
     memset(g_mqtt_cfg.sub_topics, 0, sizeof(g_mqtt_cfg.sub_topics));
     g_mqtt_cfg.sub_topic_count = 0U;
     g_mqtt_cfg.pub_topic[0] = '\0';
+}
+
+static uint32_t Ec800Tick(void *context)
+{
+    (void)context;
+    return HAL_GetTick();
+}
+
+static int Ec800Write(void *context, const uint8_t *data, uint16_t length,
+                      uint32_t timeout_ms)
+{
+    return HAL_UART_Transmit((UART_HandleTypeDef *)context, (uint8_t *)data,
+                             length, timeout_ms) == HAL_OK;
+}
+
+static void Ec800RxSink(void *context, const uint8_t *data, uint16_t length)
+{
+    EC800_AT_FeedRx((Ec800AtCore_t *)context, data, length);
+}
+
+static void Ec800RxService(void)
+{
+    (void)ABoxEc800Rx_Drain(&g_ec800_rx, Ec800RxSink, &g_ec800_at, 0U);
+    EC800_AT_SetRxOverflowCount(&g_ec800_at,
+                                ABoxEc800Rx_OverflowCount(&g_ec800_rx));
+    if (ABoxEc800Rx_TakeRestartRequest(&g_ec800_rx))
+    {
+        ABoxEc800At_AbortAll(&g_ec800_at, ABOX_EC800_RESULT_ERROR);
+        (void)HAL_UART_AbortReceive(&huart1);
+        ABoxEc800Rx_AfterRestart(&g_ec800_rx);
+        (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SZ);
+    }
 }
 /* USER CODE END 0 */
 
@@ -180,8 +217,9 @@ int main(void)
 
     APP_LOGI("EC", "restart sequence");
 
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SZ);
-    __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
+    (void)ABoxEc800Rx_Init(&g_ec800_rx, uart1_rx_buf, UART1_RX_BUF_SZ,
+                           g_uart1_rx_ring, UART1_RX_RING_SZ);
+    (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SZ);
 
     BoardConfig_Load();
     AppLog_SetLevel((AppLogLevel_t)BoardConfig_Get()->diag_log_level);
@@ -190,7 +228,10 @@ int main(void)
     GenClientId();
     MQTT_ConfigInit();
 
-    EC800_AT_Init(&g_ec800_at, &huart1);
+    {
+        const ABoxEc800AtPort at_port = {&huart1, Ec800Tick, Ec800Write, 0};
+        (void)EC800_AT_Init(&g_ec800_at, &at_port);
+    }
     MQTT_Core_SetAtCore(&g_ec800_at);
     MQTT_Core_Init(&g_mqtt_cfg, MQTT_App_OnMessage);
     OtaService_Init(&g_ec800_at);
@@ -206,6 +247,7 @@ int main(void)
     {
         uint32_t now = HAL_GetTick();
         EC_Power_Task();
+        Ec800RxService();
 
         if ((!g_mqtt_start_enable) && ((HAL_GetTick() - g_ec_restart_tick) >= 8000U))
         {
@@ -217,6 +259,12 @@ int main(void)
         if (g_mqtt_start_enable)
         {
             EC800_AT_Task(&g_ec800_at);
+            if (ABoxEc800Rx_OverflowCount(&g_ec800_rx) != g_ec800_rx_overflow_reported)
+            {
+                g_ec800_rx_overflow_reported = ABoxEc800Rx_OverflowCount(&g_ec800_rx);
+                APP_LOGE("AT", "USART1 deferred RX overflow=%lu",
+                         (unsigned long)g_ec800_rx_overflow_reported);
+            }
             OtaService_Task();
             MQTT_Core_Task();
             MQTT_App_Task();
@@ -285,10 +333,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t Size)
 {
     if (huart->Instance == USART1)
     {
-        EC800_AT_FeedRx(&g_ec800_at, uart1_rx_buf, Size);
-
-        HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SZ);
-        __HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
+        (void)ABoxEc800Rx_OnDmaEvent(&g_ec800_rx, Size);
     }
     else { (void)Size; }
 }
@@ -297,6 +342,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart)
 {
     if (huart->Instance == USART1)
     {
+        ABoxEc800Rx_RequestRestart(&g_ec800_rx);
         APP_LOGE("AT", "USART1 error=0x%08lX state=%u mqtt_st=%u rx_age=%lu pub_age=%lu",
                  (unsigned long)huart->ErrorCode, (unsigned)HAL_UART_GetState(huart),
                  (unsigned)MQTT_Core_GetState(),

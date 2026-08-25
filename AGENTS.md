@@ -1,8 +1,8 @@
-# Repository scope
+# 仓库范围
 
-- Product identity is always `top_flying_wing`; do not derive it from a customer name.
-- Keep public platform protocol separate from the vendor CAN implementation.
-- Do not add meal-delivery locker, RS485, or legacy desktop-host business.
-- Direction changes require explicit `stop` and confirmed `stopped` feedback.
-- Never claim physical motion or OTA success from a build or MQTT acknowledgement alone.
-- Release artifacts must preserve Boot `0x08000000`, App `0x08008000`, Boot State pages, and config page boundaries.
+- 产品标识始终为 `top_flying_wing`，不得从客户名称派生。
+- 公共平台协议必须与厂商 CAN 实现保持分离。
+- 不得加入送餐柜、RS485 或旧桌面上位机业务。
+- 改变运动方向前必须明确发送 `stop`，并收到已停止反馈。
+- 不得仅根据构建成功或 MQTT 确认声称真实运动或 OTA 已成功。
+- 发布产物必须保持 Boot `0x08000000`、App `0x08008000`、Boot State A/B 和配置页边界。

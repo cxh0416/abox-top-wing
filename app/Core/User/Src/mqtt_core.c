@@ -978,19 +978,16 @@ void MQTT_Core_Task(void)
 
             if (g_mqtt_rx_msg_pending)
             {
-                char topic[MQTT_CORE_TOPIC_BUF_SZ];
-                char payload[MQTT_CORE_PAYLOAD_BUF_SZ];
-
+                /* RX parsing and dispatch run serially in the bare-metal main
+                 * loop.  Dispatch the bounded pending buffers in place instead
+                 * of copying another 1152 bytes onto the 4 KiB MSP stack. */
                 __disable_irq();
-                mqtt_copy_topic(topic, sizeof(topic), g_mqtt_rx_pending_topic);
-                strncpy(payload, g_mqtt_rx_pending_payload, sizeof(payload) - 1U);
-                payload[sizeof(payload) - 1U] = '\0';
                 g_mqtt_rx_msg_pending = 0U;
-                g_mqtt_rx_pending_topic[0] = '\0';
-                g_mqtt_rx_pending_payload[0] = '\0';
                 __enable_irq();
 
-                mqtt_dispatch_message(topic, payload);
+                mqtt_dispatch_message(g_mqtt_rx_pending_topic, g_mqtt_rx_pending_payload);
+                g_mqtt_rx_pending_topic[0] = '\0';
+                g_mqtt_rx_pending_payload[0] = '\0';
                 break;
             }
 

@@ -135,7 +135,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
       "vid": "TFW000001",
       "product": "top_flying_wing",
       "fwVersion": "top-flying-wing-1.0.0",
-      "bootVersion": "top-flying-wing-boot-2.2.0",
+      "bootVersion": "abox-boot-2.3.0",
       "bootDescriptorValid": true,
       "bootApiVersion": 1,
       "bootFeatures": 15,
@@ -277,11 +277,11 @@ A-BOX 在没有待发响应、心跳、状态或 OTA 工作时，从 RAM 日志�
 | `size` | Integer | 大于 0 且不超过 `0x36800` 字节 |
 | `crc32` | String | 8 位十六进制字符串，不带 `0x` |
 
-当前 OTA 只安装 App revision。`TopFlyingWing_Boot.bin` 和 `TopFlyingWing_Full.bin` 是工厂烧录或维修产物，不通过本 Topic 下发。
+当前 OTA 只安装 App revision。公共平台 `ABox_Boot.bin` 和产品 `TopFlyingWing_Full.bin` 是工厂烧录或维修产物，不通过本 Topic 下发。
 
 ### 5.2 执行和响应语义
 
-设备使用内置 CA、HTTPS 和 EC800 UFS 分段下载镜像，随后校验长度、CRC32 和向量表。只有全部校验通过并把 Boot State 写成 `INSTALL_PENDING` 后，才返回：
+设备使用内置 CA 和 HTTPS，默认通过 `QHTTPGET + QHTTPREADFILE` 将镜像直写 EC800 UFS；直写不支持、连续失败或完整性校验失败时，自动回退为 1024 字节 Range 分片。随后校验长度、CRC32 和向量表。只有全部校验通过并把 Boot State 写成 `INSTALL_PENDING` 后，才返回：
 
 ```json
 {

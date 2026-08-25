@@ -23,11 +23,12 @@ static void event(Ec800AtEvent_t e,const uint8_t*d,uint16_t n,void*u){OtaAdapter
 static void events(void*c,ABoxBootV2AtEventFn f,void*u){OtaAdapter_t*a=c;a->events=f;a->events_user=u;EC800_AT_RegisterUrcHandler(a->at,EC800_AT_OWNER_OTA,event,a);}
 static void pause(void*c,uint8_t p){(void)c;MQTT_Core_SetPaused(p);}
 static void logline(void*c,uint8_t l,const char*m){(void)c;if(l>=3U)APP_LOGE("OTA","%s",m);else if(l==2U)APP_LOGW("OTA","%s",m);else APP_LOGI("OTA","%s",m);}
+static uint32_t overflow(void*c){OtaAdapter_t*a=c;return EC800_AT_RxOverflowCount(a->at);}
 
 void OtaService_Init(Ec800AtCore_t *at)
 {
  static ABoxBootV2AppPort p;static ABoxBootV2AppConfig c;static const ABoxBootV2Layout layout={BOOT_STATE_A_ADDR,BOOT_STATE_B_ADDR,BOOT_STATE_PAGE_SIZE,APP_START_ADDR,APP_END_ADDR,0x20000000U,0x20010000U};extern uint8_t __app_image_end;
- memset(&g_adapter,0,sizeof(g_adapter));g_adapter.at=at;memset(&p,0,sizeof(p));p.context=&g_adapter;p.tick_ms=tick;p.submit=submit;p.send_payload=send;p.begin_raw_read=raw;p.has_pending=pending;p.is_active=active;p.cancel=cancel;p.register_events=events;p.mqtt_pause=pause;p.log=logline;p.transfer_buffer=(uint8_t*)g_mqtt_rx_pending_payload;p.transfer_buffer_size=sizeof(g_mqtt_rx_pending_payload);
+ memset(&g_adapter,0,sizeof(g_adapter));g_adapter.at=at;memset(&p,0,sizeof(p));p.context=&g_adapter;p.tick_ms=tick;p.submit=submit;p.send_payload=send;p.begin_raw_read=raw;p.has_pending=pending;p.is_active=active;p.cancel=cancel;p.register_events=events;p.mqtt_pause=pause;p.log=logline;p.transfer_buffer=(uint8_t*)g_mqtt_rx_pending_payload;p.transfer_buffer_size=sizeof(g_mqtt_rx_pending_payload);p.rx_overflow_count=overflow;
  memset(&c,0,sizeof(c));c.ota_origin="https://ota.zxwl.ntiov.com:20443";c.revision_product="top_flying_wing";c.artifact_name="top_flying_wing_app.bin";c.version_prefix="top-flying-wing-";c.running_version=TopFlyingWing_AppFwVersion();c.ca_pem=(const uint8_t*)g_ota_ca_pem;c.ca_pem_length=(uint32_t)(sizeof(g_ota_ca_pem)-1U);c.app_start_addr=APP_START_ADDR;c.app_size=(uint32_t)(&__app_image_end-(uint8_t*)APP_START_ADDR);c.app_max_size=APP_MAX_SIZE;
  (void)ABoxBootV2_StateBindLayout(&layout);(void)ABoxBootV2App_Init(&p,&c);
 }

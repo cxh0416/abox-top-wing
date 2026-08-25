@@ -16,9 +16,7 @@ JLinkLog.txt
 JLinkSettings.ini
 build_*.log
 app/MDK-ARM/TopFlyingWing_App/
-boot/MDK-ARM/TopFlyingWing_Boot/
 app/MDK-ARM/.vscode/
-boot/MDK-ARM/.vscode/
 *.uvguix.*
 *.uvoptx
 
@@ -27,6 +25,8 @@ __pycache__/
 *.py[cod]
 build/
 dist/
+!dist/
+!dist/ABox_Boot.bin
 out/
 
 # Local editor and OS noise

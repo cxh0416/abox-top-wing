@@ -1,11 +1,13 @@
 # A-BOX 顶飞翼固件
 
-产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，Boot 为 `top-flying-wing-boot-2.2.0`。
+产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
+
+公共组件、完整 Boot 边界和其他产品迁移状态见 `platform/README.md`、`platform/docs/PLATFORM_CONTRACT.md`、`platform/docs/PRODUCT_MATRIX.md`。
 
 ## 结构
 
 - `app/`：STM32F105 App，负责 EC800、MQTT、CAN 控制器状态机和 Boot V2 OTA 下载。
-- `boot/`：Boot V2，只负责安装、试运行确认与回滚，不联网下载。
+- `platform/targets/stm32f105_abox_boot/`：公共平台完整 Boot 目标，只负责安装、试运行确认与回滚，不联网下载。
 - `docs/vendor/`：厂家 CAN/控制器资料，仅作为设备端帧依据。
 - `docs/protocols/`：公共业务协议及独立的 A-BOX 内部运维协议归档。
 - `dist/`：正式本地构建产物及校验清单。
@@ -25,17 +27,13 @@
 ## 构建与验证
 
 ```powershell
-cmake --preset Release -S app
-cmake --build app/build/Release
-cmake --preset Release -S boot
-cmake --build boot/build/Release
+powershell -ExecutionPolicy Bypass -File .\tools\build_release.ps1
 powershell -ExecutionPolicy Bypass -File .\tools\test_host.ps1
 python .\tools\test_boot_v2_contract.py
-powershell -ExecutionPolicy Bypass -File .\tools\package_release.ps1 `
-  -BootPath .\boot\build\Release\TopFlyingWing_Boot.bin `
-  -AppPath .\app\build\Release\TopFlyingWing_App.bin
 ```
 
-App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。Full 只拼接到 App 实际末尾，不包含配置页和 Boot State。
+日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
+
+App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。Full 只拼接到 App 实际末尾，不包含配置页和 Boot State。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
 
 本地构建和主机测试不代表 CAN 线束、终端电阻、电机、本地触摸、Boot 跳转或真实 OTA 已通过实物验收。

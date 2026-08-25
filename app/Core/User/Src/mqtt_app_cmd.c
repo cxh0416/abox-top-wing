@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "abox_boot_v2.h"
+#include "abox_boot_v2_app.h"
 #include "app_log.h"
 #include "app_version.h"
 #include "board_config.h"
@@ -298,6 +299,8 @@ static cJSON* device_info(void)
     cJSON_AddNumberToObject(obj, "bootFeatures", descriptor_valid ? descriptor.feature_flags : 0U);
     cJSON_AddStringToObject(obj, "otaScheme", "boot_v2_ufs");
     cJSON_AddStringToObject(obj, "otaDownloader", "app");
+    cJSON_AddStringToObject(obj, "stableSeedSource", ABoxBootV2App_StableSeedSource());
+    cJSON_AddBoolToObject(obj, "otaBootstrapNeedsRevision", 0);
     cJSON_AddStringToObject(obj, "otaState", boot_state_name(have_state ? state.state : BOOT_STATE_NORMAL));
     cJSON_AddStringToObject(obj, "otaPhase", OtaService_Phase());
     cJSON_AddBoolToObject(obj, "otaReady", OtaService_IsReady() ? 1 : 0);

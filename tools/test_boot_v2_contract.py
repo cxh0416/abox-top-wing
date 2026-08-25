@@ -53,6 +53,10 @@ def main() -> None:
     assert '"bootFeatures"' in info
     assert '"otaScheme", "boot_v2_ufs"' in info
     assert '"otaDownloader", "app"' in info
+    assert '"stableSeedSource", ABoxBootV2App_StableSeedSource()' in info
+    assert '"otaBootstrapNeedsRevision", 0' in info
+    assert '"ABOX_STABLE_SEED_SOURCE=" ABOX_BOOT_V2_STABLE_SEED_SOURCE' in read(ROOT / "platform/components/boot_v2/abox_boot_v2_app.c")
+    assert '#define ABOX_BOOT_V2_STABLE_SEED_SOURCE "local_flash"' in read(ROOT / "platform/include/abox_boot_v2_app.h")
     assert '"otaReady"' in info
     assert '"otaState"' in info
 

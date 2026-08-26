@@ -27,6 +27,8 @@ build/
 dist/
 !dist/
 !dist/ABox_Boot.bin
+!dist/releases/
+!dist/releases/**
 out/
 
 # Local editor and OS noise

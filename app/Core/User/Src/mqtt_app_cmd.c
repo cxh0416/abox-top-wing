@@ -233,6 +233,17 @@ void MQTT_App_AddWingSnapshot(cJSON* object)
     add_nullable_string(object, "activeAction", WingAction_Name(s->active_action));
     if (s->have_position) cJSON_AddNumberToObject(object, "positionMm", s->position_mm);
     else cJSON_AddNullToObject(object, "positionMm");
+    if (s->have_limits)
+    {
+        cJSON_AddNumberToObject(object, "topLimitMm", s->top_limit_mm);
+        cJSON_AddNumberToObject(object, "bottomLimitMm", s->bottom_limit_mm);
+    }
+    else
+    {
+        cJSON_AddNullToObject(object, "topLimitMm");
+        cJSON_AddNullToObject(object, "bottomLimitMm");
+    }
+    add_nullable_string(object, "atEndpoint", WingEndpoint_Name(s->at_endpoint));
     if (s->fault_code)
     {
         snprintf(fault, sizeof(fault), "E%02u", (unsigned)s->fault_code);

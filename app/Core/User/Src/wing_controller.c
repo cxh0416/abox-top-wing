@@ -16,6 +16,7 @@ typedef struct
     uint8_t active;
     uint8_t acked;
     uint8_t safety;
+    uint8_t endpoint;
     WingAction action;
     uint32_t started_tick;
     uint32_t ack_tick;
@@ -29,6 +30,8 @@ typedef struct
     uint8_t accepted;
     uint8_t data[8];
     uint16_t position_mm;
+    uint16_t top_limit_mm;
+    uint16_t bottom_limit_mm;
     uint8_t fault_code;
     uint8_t moving;
     char request_id[40];
@@ -43,7 +46,9 @@ static WingReportReason g_reports[REPORT_QUEUE_DEPTH];
 static uint8_t g_report_head;
 static uint8_t g_report_count;
 static uint32_t g_last_poll_tick;
+static uint32_t g_last_limit_query_tick;
 static uint8_t g_safety_sent;
+static uint8_t g_endpoint_stop_attempted;
 static CanDiagEvent g_can_diag[CAN_DIAG_QUEUE_DEPTH];
 static volatile uint8_t g_can_diag_head;
 static volatile uint8_t g_can_diag_count;
@@ -135,10 +140,17 @@ static uint8_t send_action(WingAction action, const char* request_id)
     return ok;
 }
 
-static void send_poll(void)
+static void send_status_poll(void)
 {
     uint8_t data[8];
     WingProtocol_EncodeStatusQuery(data);
+    if (!send_frame(data) && g_poll_send_fail_count < 65535U) g_poll_send_fail_count++;
+}
+
+static void send_limit_query(void)
+{
+    uint8_t data[8];
+    WingProtocol_EncodeLimitQuery(data);
     if (!send_frame(data) && g_poll_send_fail_count < 65535U) g_poll_send_fail_count++;
 }
 
@@ -159,6 +171,8 @@ static void push_can_diag(const WingCanMessage* msg, const uint8_t data[8], cons
     event->action = msg->action;
     event->accepted = msg->accepted;
     event->position_mm = msg->position_mm;
+    event->top_limit_mm = msg->top_limit_mm;
+    event->bottom_limit_mm = msg->bottom_limit_mm;
     event->fault_code = msg->fault_code;
     event->moving = msg->moving;
     memcpy(event->data, data, sizeof(event->data));
@@ -194,17 +208,23 @@ static void drain_can_diag(void)
                      event.data[4], event.data[5], event.data[6], event.data[7],
                      (unsigned)event.position_mm, (unsigned)event.fault_code,
                      (unsigned)event.moving, (unsigned)event.accepted);
+        else if (have_event && event.kind == WING_FRAME_LIMITS)
+            APP_LOGI("CAN", "rx limit rid=%s top=%u bottom=%u",
+                     event.request_id, (unsigned)event.top_limit_mm,
+                     (unsigned)event.bottom_limit_mm);
     } while (have_event);
 }
 
 static void clear_pending(void) { memset(&g_pending, 0, sizeof(g_pending)); }
 
-static void begin_pending(WingAction action, const char* request_id, uint8_t safety, uint32_t now)
+static void begin_pending(WingAction action, const char* request_id, uint8_t safety,
+                          uint8_t endpoint, uint32_t now)
 {
     clear_pending();
     g_pending.active = 1U;
     g_pending.action = action;
     g_pending.safety = safety;
+    g_pending.endpoint = endpoint;
     g_pending.started_tick = now;
     copy_id(g_pending.request_id, request_id);
 }
@@ -217,7 +237,9 @@ void WingController_Init(void)
     g_result_head = g_result_count = 0U;
     g_report_head = g_report_count = 0U;
     g_last_poll_tick = HAL_GetTick();
+    g_last_limit_query_tick = HAL_GetTick();
     g_safety_sent = 0U;
+    g_endpoint_stop_attempted = 0U;
     memset(g_can_diag, 0, sizeof(g_can_diag));
     g_can_diag_head = g_can_diag_count = 0U;
     g_can_diag_dropped = g_can_invalid_count = 0U;
@@ -272,7 +294,7 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
         return 200U;
     }
     if (!send_action(action, request_id)) return 5001U;
-    begin_pending(action, request_id, 0U, now);
+    begin_pending(action, request_id, 0U, 0U, now);
     APP_LOGI("WING", "request action=%s id=%s", WingAction_Name(action), request_id);
     return 0U;
 }
@@ -284,19 +306,45 @@ static void finalize_from_status(uint32_t now)
     {
         if (g_state.snapshot.motion_state != WING_MOTION_STOPPED && g_state.snapshot.motion_state != WING_MOTION_FAULT) return;
         if (g_state.raw_moving) return;
-        WingState_ConfirmStop(&g_state, g_pending.request_id, g_pending.safety ? 0U : 1U);
-        if (!g_pending.safety) push_result(g_pending.request_id, WING_ACTION_STOP, 200U);
+        WingState_ConfirmStop(&g_state, g_pending.request_id,
+                              (g_pending.safety || g_pending.endpoint) ? 0U : 1U);
+        if (!g_pending.safety && !g_pending.endpoint)
+            push_result(g_pending.request_id, WING_ACTION_STOP, 200U);
         APP_LOGI("WING", "done rid=%s act=stop code=200", g_pending.request_id);
-        push_report(g_pending.safety ? WING_REPORT_SAFETY_STOP : WING_REPORT_STATE_CHANGED);
+        push_report(g_pending.safety ? WING_REPORT_SAFETY_STOP :
+                    (g_pending.endpoint ? WING_REPORT_ENDPOINT_STOP : WING_REPORT_STATE_CHANGED));
         g_safety_sent = 0U;
         clear_pending();
         return;
     }
     WingState_AcceptDirection(&g_state, g_pending.action, g_pending.request_id, now);
+    g_endpoint_stop_attempted = 0U;
     push_result(g_pending.request_id, g_pending.action, 200U);
     APP_LOGI("WING", "done rid=%s act=%s code=200", g_pending.request_id, WingAction_Name(g_pending.action));
     push_report(WING_REPORT_STATE_CHANGED);
     clear_pending();
+}
+
+static void maybe_start_endpoint_stop(uint32_t now)
+{
+    WingAction action = g_state.snapshot.active_action;
+    if (g_pending.active || g_endpoint_stop_attempted) return;
+    if (action != WING_ACTION_ASCEND && action != WING_ACTION_DESCEND) return;
+    if (!WingState_EndpointReached(&g_state, action)) return;
+    g_endpoint_stop_attempted = 1U;
+    if (!send_action(WING_ACTION_STOP, ""))
+    {
+        APP_LOGE("WING", "endpoint stop tx failed act=%s pos=%u",
+                 WingAction_Name(action), (unsigned)g_state.snapshot.position_mm);
+        push_report(WING_REPORT_ENDPOINT_STOP);
+        return;
+    }
+    APP_LOGI("WING", "endpoint stop act=%s pos=%u top=%u bottom=%u",
+             WingAction_Name(action), (unsigned)g_state.snapshot.position_mm,
+             (unsigned)g_state.snapshot.top_limit_mm,
+             (unsigned)g_state.snapshot.bottom_limit_mm);
+    begin_pending(WING_ACTION_STOP, "", 0U, 1U, now);
+    push_report(WING_REPORT_ENDPOINT_STOP);
 }
 
 void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
@@ -326,25 +374,47 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
     {
         if (!msg.accepted)
         {
-            if (!g_pending.safety) push_result(g_pending.request_id, g_pending.action, 5004U);
+            if (!g_pending.safety && !g_pending.endpoint)
+                push_result(g_pending.request_id, g_pending.action, 5004U);
             clear_pending();
             return;
         }
         g_pending.acked = 1U;
         g_pending.ack_tick = now;
-        send_poll();
+        send_status_poll();
+        return;
+    }
+    if (msg.kind == WING_FRAME_LIMITS)
+    {
+        uint8_t changed = !g_state.snapshot.have_limits ||
+                          g_state.snapshot.top_limit_mm != msg.top_limit_mm ||
+                          g_state.snapshot.bottom_limit_mm != msg.bottom_limit_mm;
+        if (!WingState_ApplyLimits(&g_state, msg.top_limit_mm, msg.bottom_limit_mm))
+        {
+            APP_LOGW("WING", "invalid limits top=%u bottom=%u",
+                     (unsigned)msg.top_limit_mm, (unsigned)msg.bottom_limit_mm);
+            return;
+        }
+        if (changed) push_report(WING_REPORT_STATE_CHANGED);
+        maybe_start_endpoint_stop(now);
         return;
     }
     if (msg.kind != WING_FRAME_STATUS || !msg.accepted) return;
     old_motion = g_state.snapshot.motion_state;
     old_online = g_state.snapshot.controller_online;
     old_fault = g_state.snapshot.fault_code;
+    if (!old_online)
+    {
+        if (g_state.snapshot.have_feedback) WingState_InvalidateLimits(&g_state);
+        g_last_limit_query_tick = now - WING_LIMIT_RETRY_MS;
+    }
     WingState_ApplyFeedback(&g_state, now, msg.position_mm, msg.fault_code, msg.moving);
     if (!old_online) { g_controller_online_event = 1U; push_report(WING_REPORT_CONTROLLER_ONLINE); }
     if (!old_fault && msg.fault_code) push_report(WING_REPORT_FAULT_RAISED);
     else if (old_fault && !msg.fault_code) push_report(WING_REPORT_FAULT_CLEARED);
     else if (old_motion != g_state.snapshot.motion_state) push_report(WING_REPORT_STATE_CHANGED);
     finalize_from_status(now);
+    maybe_start_endpoint_stop(now);
 }
 
 void WingController_Task(uint32_t now)
@@ -381,7 +451,8 @@ void WingController_Task(uint32_t now)
     {
         APP_LOGW("WING", "timeout rid=%s act=%s ack=%u", g_pending.request_id,
                  WingAction_Name(g_pending.action), (unsigned)g_pending.acked);
-        if (!g_pending.safety) push_result(g_pending.request_id, g_pending.action, 5003U);
+        if (!g_pending.safety && !g_pending.endpoint)
+            push_result(g_pending.request_id, g_pending.action, 5003U);
         clear_pending();
     }
 
@@ -395,7 +466,7 @@ void WingController_Task(uint32_t now)
         if (!g_pending.active && send_action(WING_ACTION_STOP, ""))
         {
             APP_LOGW("WING", "safety stop reason=%s", WingSafetyReason_Name(g_state.snapshot.safety_reason));
-            begin_pending(WING_ACTION_STOP, "", 1U, now);
+            begin_pending(WING_ACTION_STOP, "", 1U, 0U, now);
             g_safety_sent = 1U;
             push_report(WING_REPORT_SAFETY_STOP);
         }
@@ -404,7 +475,14 @@ void WingController_Task(uint32_t now)
     if ((now - g_last_poll_tick) >= WING_STATUS_POLL_MS)
     {
         g_last_poll_tick = now;
-        send_poll();
+        send_status_poll();
+    }
+
+    if (g_state.snapshot.controller_online && !g_state.snapshot.have_limits &&
+        (now - g_last_limit_query_tick) >= WING_LIMIT_RETRY_MS)
+    {
+        g_last_limit_query_tick = now;
+        send_limit_query();
     }
 }
 
@@ -437,5 +515,6 @@ const char* WingReportReason_Name(WingReportReason reason)
     if (reason == WING_REPORT_FAULT_RAISED) return "fault_raised";
     if (reason == WING_REPORT_FAULT_CLEARED) return "fault_cleared";
     if (reason == WING_REPORT_SAFETY_STOP) return "safety_stop";
+    if (reason == WING_REPORT_ENDPOINT_STOP) return "endpoint_stop";
     return "periodic";
 }

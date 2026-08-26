@@ -1,7 +1,7 @@
 param(
     [string]$OutputDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) "dist"),
     [string]$BootPath = "", [string]$AppPath = "",
-    [string]$FirmwareVersion = "top-flying-wing-1.0.5",
+    [string]$FirmwareVersion = "top-flying-wing-1.0.7",
     [string]$BootVersion = "abox-boot-2.3.0"
 )
 $root = Split-Path -Parent $PSScriptRoot

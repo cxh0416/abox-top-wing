@@ -1,0 +1,11 @@
+﻿{
+    "schema_version":  1,
+    "product":  "top_flying_wing",
+    "version":  "top-flying-wing-1.0.7",
+    "artifact":  "top_flying_wing_app.bin",
+    "file":  "TopFlyingWing_App.bin",
+    "immutable":  true,
+    "size":  79900,
+    "crc32":  "84B52C1A",
+    "sha256":  "5ec16d7ff90a396b4354be3445b6c24ebac590028b68c87ba43e23bf3f7c8961"
+}

@@ -44,6 +44,9 @@ def main() -> None:
     assert 'c.ota_origin="https://ota.zxwl.ntiov.com:20443"' in app_core
     assert 'c.revision_product="top_flying_wing"' in app_core
     assert 'c.artifact_name="top_flying_wing_app.bin"' in app_core
+    assert "g_ota_transfer_buffer" in app_core
+    assert "p.transfer_buffer=g_ota_transfer_buffer" in app_core
+    assert "g_mqtt_rx_pending_payload" not in app_core
     assert 'strncmp(command, "AT+QFUPL=\\\"", 10U)' in at_core
     assert "AT+QHTTPREADFILE=" in downloader
     assert "AT+QHTTPGETEX=80" in downloader

@@ -8,6 +8,20 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "Wing protocol/state host tests passed"
 
+$controllerOut = Join-Path $root "tests\test_wing_controller.exe"
+& "D:\MinGW\bin\gcc.exe" -std=c11 -Wall -Wextra `
+  -DTOP_WING_CAN_BUS=2 `
+  -I "$root\app\Core\User\Inc" `
+  -I "$root\tests\stubs" `
+  "$root\tests\test_wing_controller.c" `
+  "$root\app\Core\User\Src\wing_controller.c" `
+  "$root\app\Core\User\Src\wing_protocol.c" `
+  "$root\app\Core\User\Src\wing_state.c" -o $controllerOut
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $controllerOut
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "Wing controller endpoint-stop host tests passed"
+
 $logOut = Join-Path $root "tests\test_app_log.exe"
 & "D:\MinGW\bin\gcc.exe" -std=c11 -Wall -Wextra `
   -I "$root\tests\stubs" `

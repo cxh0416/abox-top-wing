@@ -31,6 +31,17 @@ static void refresh_motion(WingState* state)
     else s->motion_state = WING_MOTION_MOVING_UNKNOWN;
 }
 
+static void refresh_endpoint(WingState* state)
+{
+    WingSnapshot* s = &state->snapshot;
+    s->at_endpoint = WING_ENDPOINT_NONE;
+    if (!s->have_position || !s->have_limits) return;
+    if ((uint32_t)s->position_mm + WING_ENDPOINT_TOLERANCE_MM >= s->top_limit_mm)
+        s->at_endpoint = WING_ENDPOINT_TOP;
+    else if ((uint32_t)s->position_mm <= (uint32_t)s->bottom_limit_mm + WING_ENDPOINT_TOLERANCE_MM)
+        s->at_endpoint = WING_ENDPOINT_BOTTOM;
+}
+
 void WingState_Init(WingState* state)
 {
     if (!state) return;
@@ -60,6 +71,39 @@ void WingState_ApplyFeedback(WingState* state, uint32_t now, uint16_t position_m
     if (fault_code && (state->raw_moving || state->snapshot.active_action != WING_ACTION_NONE))
         WingState_LatchSafety(state, WING_SAFETY_CONTROLLER_FAULT);
     refresh_motion(state);
+    refresh_endpoint(state);
+}
+
+uint8_t WingState_ApplyLimits(WingState* state, uint16_t top_limit_mm, uint16_t bottom_limit_mm)
+{
+    if (!state || bottom_limit_mm > top_limit_mm) return 0U;
+    state->snapshot.top_limit_mm = top_limit_mm;
+    state->snapshot.bottom_limit_mm = bottom_limit_mm;
+    state->snapshot.have_limits = 1U;
+    refresh_endpoint(state);
+    return 1U;
+}
+
+void WingState_InvalidateLimits(WingState* state)
+{
+    if (!state) return;
+    state->snapshot.top_limit_mm = 0U;
+    state->snapshot.bottom_limit_mm = 0U;
+    state->snapshot.have_limits = 0U;
+    state->snapshot.at_endpoint = WING_ENDPOINT_NONE;
+}
+
+uint8_t WingState_EndpointReached(const WingState* state, WingAction action)
+{
+    const WingSnapshot* s;
+    if (!state) return 0U;
+    s = &state->snapshot;
+    if (!s->have_position || !s->have_limits) return 0U;
+    if (action == WING_ACTION_ASCEND)
+        return (uint32_t)s->position_mm + WING_ENDPOINT_TOLERANCE_MM >= s->top_limit_mm ? 1U : 0U;
+    if (action == WING_ACTION_DESCEND)
+        return (uint32_t)s->position_mm <= (uint32_t)s->bottom_limit_mm + WING_ENDPOINT_TOLERANCE_MM ? 1U : 0U;
+    return 0U;
 }
 
 void WingState_Tick(WingState* state, uint32_t now)
@@ -160,5 +204,12 @@ const char* WingSafetyReason_Name(WingSafetyReason value)
     if (value == WING_SAFETY_FEEDBACK_TIMEOUT) return "feedback_timeout";
     if (value == WING_SAFETY_MAX_RUNTIME) return "max_runtime";
     if (value == WING_SAFETY_CONTROLLER_FAULT) return "controller_fault";
+    return "";
+}
+
+const char* WingEndpoint_Name(WingEndpoint value)
+{
+    if (value == WING_ENDPOINT_TOP) return "top";
+    if (value == WING_ENDPOINT_BOTTOM) return "bottom";
     return "";
 }

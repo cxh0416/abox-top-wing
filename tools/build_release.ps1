@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param([ValidateSet('Debug', 'Release')] [string] $Configuration = 'Release')
+param(
+    [ValidateSet('Debug', 'Release')] [string] $Configuration = 'Release',
+    [string] $OutputDirectory = '',
+    [string] $FirmwareVersion = 'top-flying-wing-1.0.7'
+)
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -26,5 +30,11 @@ if ($LASTEXITCODE -ne 0) { throw 'App build failed' }
 $appArtifact = Join-Path $appBuild 'TopFlyingWing_App.bin'
 if (-not (Test-Path -LiteralPath $appArtifact -PathType Leaf)) { throw "Missing App artifact: $appArtifact" }
 
-& (Join-Path $PSScriptRoot 'package_release.ps1') -BootPath $bootArtifact -AppPath $appArtifact
+$packageArgs = @{
+    BootPath = $bootArtifact
+    AppPath = $appArtifact
+    FirmwareVersion = $FirmwareVersion
+}
+if ($OutputDirectory) { $packageArgs.OutputDirectory = $OutputDirectory }
+& (Join-Path $PSScriptRoot 'package_release.ps1') @packageArgs
 exit $LASTEXITCODE

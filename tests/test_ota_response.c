@@ -97,7 +97,7 @@ uint8_t BootState_Load(BootStateRecord_t* state) { (void)state; return 0U; }
 int ABoxBootV2_DescriptorRead(ABoxBootV2Descriptor* descriptor) { (void)descriptor; return 0; }
 int ABoxBootV2_DescriptorValid(const ABoxBootV2Descriptor* descriptor) { (void)descriptor; return 0; }
 const char* ABoxBootV2App_StableSeedSource(void) { return "none"; }
-const char* TopFlyingWing_AppFwVersion(void) { return "top-flying-wing-1.0.5"; }
+const char* TopFlyingWing_AppFwVersion(void) { return "top-flying-wing-1.0.7"; }
 const char* OtaService_Phase(void) { return "IDLE"; }
 uint8_t MQTT_App_ScheduleMqttConfigTrial(const char* vid, const char* host, uint16_t port,
                                          const char* username, const char* password)
@@ -113,6 +113,7 @@ const WingSnapshot* WingController_GetSnapshot(void)
 const char* WingAction_Name(WingAction action) { (void)action; return "none"; }
 const char* WingMotionState_Name(WingMotionState state) { (void)state; return "stopped"; }
 const char* WingSafetyReason_Name(WingSafetyReason reason) { (void)reason; return ""; }
+const char* WingEndpoint_Name(WingEndpoint endpoint) { (void)endpoint; return ""; }
 uint16_t WingController_Request(WingAction action, const char* request_id)
 {
     (void)action; (void)request_id; return 0U;
@@ -124,8 +125,8 @@ static cJSON* ota_params(void)
     cJSON* params = cJSON_CreateObject();
     assert(params);
     cJSON_AddStringToObject(params, "url",
-        "https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/top-flying-wing-1.0.5/top_flying_wing_app.bin");
-    cJSON_AddStringToObject(params, "version", "top-flying-wing-1.0.5");
+        "https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/top-flying-wing-1.0.7/top_flying_wing_app.bin");
+    cJSON_AddStringToObject(params, "version", "top-flying-wing-1.0.7");
     cJSON_AddNumberToObject(params, "size", 1234);
     cJSON_AddStringToObject(params, "crc32", "1234ABCD");
     return params;

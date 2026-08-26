@@ -28,6 +28,14 @@ void WingProtocol_EncodeStatusQuery(uint8_t out[WING_CAN_DLC])
     out[1] = 'D';
 }
 
+void WingProtocol_EncodeLimitQuery(uint8_t out[WING_CAN_DLC])
+{
+    if (!out) return;
+    memset(out, 0, WING_CAN_DLC);
+    out[0] = 'R';
+    out[1] = 'L';
+}
+
 uint8_t WingProtocol_Decode(uint32_t ext_id, uint8_t dlc, const uint8_t data[WING_CAN_DLC], WingCanMessage* out)
 {
     WingAction action = WING_ACTION_NONE;
@@ -42,6 +50,14 @@ uint8_t WingProtocol_Decode(uint32_t ext_id, uint8_t dlc, const uint8_t data[WIN
         out->fault_code = data[4];
         out->moving = data[5];
         out->accepted = (data[7] == 0U) ? 1U : 0U;
+        return 1U;
+    }
+    if (data[0] == 'R' && data[1] == 'L')
+    {
+        out->kind = WING_FRAME_LIMITS;
+        out->top_limit_mm = (uint16_t)(((uint16_t)data[2] << 8) | data[3]);
+        out->bottom_limit_mm = (uint16_t)(((uint16_t)data[4] << 8) | data[5]);
+        out->accepted = 1U;
         return 1U;
     }
     for (action = WING_ACTION_ASCEND; action <= WING_ACTION_STOP; action = (WingAction)(action + 1))

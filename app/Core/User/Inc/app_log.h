@@ -11,11 +11,18 @@ typedef enum
     APP_LOG_LEVEL_DEBUG = 3
 } AppLogLevel_t;
 
+#define APP_LOG_MQTT_BATCH_MAX 6U
+#define APP_LOG_MQTT_LINE_SIZE 144U
+
 void AppLog_Init(void);
 void AppLog_Clear(void);
 void AppLog_Printf(AppLogLevel_t level, const char* tag, const char* fmt, ...);
 uint16_t AppLog_Dump(char* out, uint16_t out_sz);
 uint16_t AppLog_ReadMqttLine(char* out, uint16_t out_sz);
+uint8_t AppLog_PeekMqttLines(char lines[][APP_LOG_MQTT_LINE_SIZE], uint8_t max_lines);
+void AppLog_CommitMqttLines(void);
+void AppLog_AbortMqttLines(void);
+uint16_t AppLog_GetMqttPendingCount(void);
 void AppLog_DebugTask(void);
 void AppLog_SetLevel(AppLogLevel_t level);
 AppLogLevel_t AppLog_GetLevel(void);

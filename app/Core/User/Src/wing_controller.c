@@ -8,6 +8,8 @@
 
 #define RESULT_QUEUE_DEPTH 2U
 #define REPORT_QUEUE_DEPTH 4U
+#define CAN_DIAG_QUEUE_DEPTH 8U
+#define CAN_DIAG_SUMMARY_MS 5000U
 
 typedef struct
 {
@@ -20,6 +22,18 @@ typedef struct
     char request_id[40];
 } PendingControl;
 
+typedef struct
+{
+    WingFrameKind kind;
+    WingAction action;
+    uint8_t accepted;
+    uint8_t data[8];
+    uint16_t position_mm;
+    uint8_t fault_code;
+    uint8_t moving;
+    char request_id[40];
+} CanDiagEvent;
+
 static WingState g_state;
 static PendingControl g_pending;
 static WingControlResult g_results[RESULT_QUEUE_DEPTH];
@@ -30,6 +44,16 @@ static uint8_t g_report_head;
 static uint8_t g_report_count;
 static uint32_t g_last_poll_tick;
 static uint8_t g_safety_sent;
+static CanDiagEvent g_can_diag[CAN_DIAG_QUEUE_DEPTH];
+static volatile uint8_t g_can_diag_head;
+static volatile uint8_t g_can_diag_count;
+static volatile uint16_t g_can_diag_dropped;
+static volatile uint16_t g_can_invalid_count;
+static volatile uint32_t g_can_invalid_last_id;
+static volatile uint8_t g_can_invalid_last_dlc;
+static uint16_t g_poll_send_fail_count;
+static uint32_t g_can_diag_summary_tick;
+static volatile uint8_t g_controller_online_event;
 
 static CAN_HandleTypeDef* selected_can(void)
 {
@@ -93,17 +117,84 @@ static uint8_t send_frame(const uint8_t data[8])
     return HAL_CAN_AddTxMessage(selected_can(), &header, (uint8_t*)data, &mailbox) == HAL_OK ? 1U : 0U;
 }
 
-static uint8_t send_action(WingAction action)
+static uint8_t send_action(WingAction action, const char* request_id)
 {
     uint8_t data[8];
-    return WingProtocol_EncodeAction(action, data) && send_frame(data);
+    uint8_t ok;
+    if (!WingProtocol_EncodeAction(action, data)) return 0U;
+    ok = send_frame(data);
+    if (ok)
+        APP_LOGI("CAN", "tx rid=%s act=%s id=%08lX %02X%02X%02X%02X%02X%02X%02X%02X",
+                 (request_id && request_id[0]) ? request_id : "safety", WingAction_Name(action),
+                 (unsigned long)WING_CAN_TX_ID, data[0], data[1], data[2], data[3],
+                 data[4], data[5], data[6], data[7]);
+    else
+        APP_LOGE("CAN", "tx fail rid=%s act=%s id=%08lX",
+                 (request_id && request_id[0]) ? request_id : "safety", WingAction_Name(action),
+                 (unsigned long)WING_CAN_TX_ID);
+    return ok;
 }
 
 static void send_poll(void)
 {
     uint8_t data[8];
     WingProtocol_EncodeStatusQuery(data);
-    (void)send_frame(data);
+    if (!send_frame(data) && g_poll_send_fail_count < 65535U) g_poll_send_fail_count++;
+}
+
+static void push_can_diag(const WingCanMessage* msg, const uint8_t data[8], const char* request_id)
+{
+    uint8_t tail;
+    CanDiagEvent* event;
+    if (!msg || !data) return;
+    if (g_can_diag_count >= CAN_DIAG_QUEUE_DEPTH)
+    {
+        if (g_can_diag_dropped < 65535U) g_can_diag_dropped++;
+        return;
+    }
+    tail = (uint8_t)((g_can_diag_head + g_can_diag_count) % CAN_DIAG_QUEUE_DEPTH);
+    event = &g_can_diag[tail];
+    memset(event, 0, sizeof(*event));
+    event->kind = msg->kind;
+    event->action = msg->action;
+    event->accepted = msg->accepted;
+    event->position_mm = msg->position_mm;
+    event->fault_code = msg->fault_code;
+    event->moving = msg->moving;
+    memcpy(event->data, data, sizeof(event->data));
+    copy_id(event->request_id, request_id);
+    g_can_diag_count++;
+}
+
+static void drain_can_diag(void)
+{
+    CanDiagEvent event;
+    uint8_t have_event;
+    do
+    {
+        have_event = 0U;
+        __disable_irq();
+        if (g_can_diag_count)
+        {
+            event = g_can_diag[g_can_diag_head];
+            g_can_diag_head = (uint8_t)((g_can_diag_head + 1U) % CAN_DIAG_QUEUE_DEPTH);
+            g_can_diag_count--;
+            have_event = 1U;
+        }
+        __enable_irq();
+        if (have_event && event.kind == WING_FRAME_ACK)
+            APP_LOGI("CAN", "rx ack rid=%s act=%s ok=%u %02X%02X%02X%02X%02X%02X%02X%02X",
+                     event.request_id, WingAction_Name(event.action), (unsigned)event.accepted,
+                     event.data[0], event.data[1], event.data[2], event.data[3],
+                     event.data[4], event.data[5], event.data[6], event.data[7]);
+        else if (have_event && event.kind == WING_FRAME_STATUS)
+            APP_LOGI("CAN", "rx stat rid=%s d=%02X%02X%02X%02X%02X%02X%02X%02X p=%u f=%u m=%u ok=%u",
+                     event.request_id,
+                     event.data[0], event.data[1], event.data[2], event.data[3],
+                     event.data[4], event.data[5], event.data[6], event.data[7],
+                     (unsigned)event.position_mm, (unsigned)event.fault_code,
+                     (unsigned)event.moving, (unsigned)event.accepted);
+    } while (have_event);
 }
 
 static void clear_pending(void) { memset(&g_pending, 0, sizeof(g_pending)); }
@@ -127,6 +218,12 @@ void WingController_Init(void)
     g_report_head = g_report_count = 0U;
     g_last_poll_tick = HAL_GetTick();
     g_safety_sent = 0U;
+    memset(g_can_diag, 0, sizeof(g_can_diag));
+    g_can_diag_head = g_can_diag_count = 0U;
+    g_can_diag_dropped = g_can_invalid_count = 0U;
+    g_can_invalid_last_id = 0U; g_can_invalid_last_dlc = 0U;
+    g_poll_send_fail_count = 0U; g_can_diag_summary_tick = HAL_GetTick();
+    g_controller_online_event = 0U;
     memset(&filter, 0, sizeof(filter));
     filter.FilterBank = (TOP_WING_CAN_BUS == 1) ? 0U : 14U;
     filter.FilterMode = CAN_FILTERMODE_IDMASK;
@@ -134,7 +231,7 @@ void WingController_Init(void)
     filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
     filter.FilterActivation = ENABLE;
     filter.SlaveStartFilterBank = 14U;
-    /* Hardware bank accepts extended frames; WingProtocol_Decode enforces exact ID 0x2 and DLC 8. */
+    /* Hardware bank accepts extended frames; WingProtocol_Decode enforces the configured response ID and DLC 8. */
     (void)HAL_CAN_ConfigFilter(selected_can(), &filter);
     (void)HAL_CAN_Start(selected_can());
     (void)HAL_CAN_ActivateNotification(selected_can(), CAN_IT_RX_FIFO0_MSG_PENDING);
@@ -156,11 +253,17 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
     }
     else if (g_pending.active)
     {
+        APP_LOGW("WING", "reject rid=%s act=%s code=%u", request_id, WingAction_Name(action),
+                 (unsigned)(action == WING_ACTION_STOP ? 5003U : 4003U));
         return action == WING_ACTION_STOP ? 5003U : 4003U;
     }
 
     code = WingState_AdmissionCode(&g_state, action);
-    if (code) return code;
+    if (code)
+    {
+        APP_LOGW("WING", "reject rid=%s act=%s code=%u", request_id, WingAction_Name(action), (unsigned)code);
+        return code;
+    }
     if (action == WING_ACTION_STOP && g_state.snapshot.motion_state == WING_MOTION_STOPPED &&
         g_state.snapshot.active_action == WING_ACTION_NONE && !g_state.snapshot.fault_code)
     {
@@ -168,7 +271,7 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
         push_report(WING_REPORT_STATE_CHANGED);
         return 200U;
     }
-    if (!send_action(action)) return 5001U;
+    if (!send_action(action, request_id)) return 5001U;
     begin_pending(action, request_id, 0U, now);
     APP_LOGI("WING", "request action=%s id=%s", WingAction_Name(action), request_id);
     return 0U;
@@ -183,6 +286,7 @@ static void finalize_from_status(uint32_t now)
         if (g_state.raw_moving) return;
         WingState_ConfirmStop(&g_state, g_pending.request_id, g_pending.safety ? 0U : 1U);
         if (!g_pending.safety) push_result(g_pending.request_id, WING_ACTION_STOP, 200U);
+        APP_LOGI("WING", "done rid=%s act=stop code=200", g_pending.request_id);
         push_report(g_pending.safety ? WING_REPORT_SAFETY_STOP : WING_REPORT_STATE_CHANGED);
         g_safety_sent = 0U;
         clear_pending();
@@ -190,6 +294,7 @@ static void finalize_from_status(uint32_t now)
     }
     WingState_AcceptDirection(&g_state, g_pending.action, g_pending.request_id, now);
     push_result(g_pending.request_id, g_pending.action, 200U);
+    APP_LOGI("WING", "done rid=%s act=%s code=200", g_pending.request_id, WingAction_Name(g_pending.action));
     push_report(WING_REPORT_STATE_CHANGED);
     clear_pending();
 }
@@ -203,9 +308,20 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
     uint8_t old_online, old_fault;
     uint32_t now;
     if (hcan != selected_can()) return;
-    if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &header, data) != HAL_OK) return;
-    if (header.IDE != CAN_ID_EXT || !WingProtocol_Decode(header.ExtId, (uint8_t)header.DLC, data, &msg)) return;
+    if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &header, data) != HAL_OK)
+    {
+        if (g_can_invalid_count < 65535U) g_can_invalid_count++;
+        return;
+    }
+    if (header.IDE != CAN_ID_EXT || !WingProtocol_Decode(header.ExtId, (uint8_t)header.DLC, data, &msg))
+    {
+        if (g_can_invalid_count < 65535U) g_can_invalid_count++;
+        g_can_invalid_last_id = header.ExtId;
+        g_can_invalid_last_dlc = (uint8_t)header.DLC;
+        return;
+    }
     now = HAL_GetTick();
+    if (g_pending.active) push_can_diag(&msg, data, g_pending.request_id);
     if (msg.kind == WING_FRAME_ACK && g_pending.active && msg.action == g_pending.action)
     {
         if (!msg.accepted)
@@ -224,7 +340,7 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
     old_online = g_state.snapshot.controller_online;
     old_fault = g_state.snapshot.fault_code;
     WingState_ApplyFeedback(&g_state, now, msg.position_mm, msg.fault_code, msg.moving);
-    if (!old_online) push_report(WING_REPORT_CONTROLLER_ONLINE);
+    if (!old_online) { g_controller_online_event = 1U; push_report(WING_REPORT_CONTROLLER_ONLINE); }
     if (!old_fault && msg.fault_code) push_report(WING_REPORT_FAULT_RAISED);
     else if (old_fault && !msg.fault_code) push_report(WING_REPORT_FAULT_CLEARED);
     else if (old_motion != g_state.snapshot.motion_state) push_report(WING_REPORT_STATE_CHANGED);
@@ -234,11 +350,37 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
 void WingController_Task(uint32_t now)
 {
     uint8_t was_online = g_state.snapshot.controller_online;
+    drain_can_diag();
+    if (g_controller_online_event)
+    {
+        __disable_irq();g_controller_online_event=0U;__enable_irq();
+        APP_LOGI("WING", "controller online");
+    }
     WingState_Tick(&g_state, now);
-    if (was_online && !g_state.snapshot.controller_online) push_report(WING_REPORT_CONTROLLER_OFFLINE);
+    if (was_online && !g_state.snapshot.controller_online)
+    {
+        APP_LOGW("WING", "controller offline age=%lu", (unsigned long)g_state.snapshot.feedback_age_ms);
+        push_report(WING_REPORT_CONTROLLER_OFFLINE);
+    }
+
+    if ((now - g_can_diag_summary_tick) >= CAN_DIAG_SUMMARY_MS)
+    {
+        uint16_t invalid,dropped;
+        __disable_irq();
+        invalid=g_can_invalid_count;dropped=g_can_diag_dropped;
+        g_can_invalid_count=0U;g_can_diag_dropped=0U;
+        __enable_irq();
+        if(invalid)APP_LOGW("CAN","invalid count=%u lastId=%08lX dlc=%u",(unsigned)invalid,
+                           (unsigned long)g_can_invalid_last_id,(unsigned)g_can_invalid_last_dlc);
+        if(dropped)APP_LOGW("CAN","diag dropped=%u",(unsigned)dropped);
+        if(g_poll_send_fail_count){APP_LOGW("CAN","poll tx fail count=%u",(unsigned)g_poll_send_fail_count);g_poll_send_fail_count=0U;}
+        g_can_diag_summary_tick=now;
+    }
 
     if (g_pending.active && (now - g_pending.started_tick) >= WING_COMMAND_TIMEOUT_MS)
     {
+        APP_LOGW("WING", "timeout rid=%s act=%s ack=%u", g_pending.request_id,
+                 WingAction_Name(g_pending.action), (unsigned)g_pending.acked);
         if (!g_pending.safety) push_result(g_pending.request_id, g_pending.action, 5003U);
         clear_pending();
     }
@@ -250,8 +392,9 @@ void WingController_Task(uint32_t now)
             push_result(g_pending.request_id, g_pending.action, 5003U);
             clear_pending();
         }
-        if (!g_pending.active && send_action(WING_ACTION_STOP))
+        if (!g_pending.active && send_action(WING_ACTION_STOP, ""))
         {
+            APP_LOGW("WING", "safety stop reason=%s", WingSafetyReason_Name(g_state.snapshot.safety_reason));
             begin_pending(WING_ACTION_STOP, "", 1U, now);
             g_safety_sent = 1U;
             push_report(WING_REPORT_SAFETY_STOP);

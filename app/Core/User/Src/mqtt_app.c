@@ -11,7 +11,7 @@
 #include "wing_controller.h"
 
 #define MQTT_APP_OTA_RESET_DELAY_MS 200U
-#define MQTT_APP_OTA_FORCE_RESET_MS 3000U
+#define MQTT_APP_OTA_FORCE_RESET_MS 15000U
 
 char g_mqtt_app_device_id[64], g_mqtt_app_heartbeat_topic[128], g_mqtt_app_ctrl_topic[128];
 char g_mqtt_app_ctrl_resp_topic[128], g_mqtt_app_status_report_topic[128];
@@ -21,6 +21,8 @@ uint32_t g_mqtt_app_last_hb_tick, g_mqtt_app_last_hb_ok_tick, g_mqtt_app_seq_no;
 volatile uint8_t g_mqtt_app_hb_pending, g_mqtt_app_resp_pending, g_mqtt_app_resp_publish_active;
 uint32_t g_mqtt_app_resp_pub_ok_seq, g_mqtt_app_resp_tick;
 char g_mqtt_app_resp_topic[128], g_mqtt_app_resp_payload[MQTT_APP_JSON_BUF_SZ];
+char g_mqtt_app_resp_request_id[40];
+uint16_t g_mqtt_app_resp_code;
 volatile uint8_t g_mqtt_app_ota_reset_pending;
 uint32_t g_mqtt_app_ota_reset_tick, g_mqtt_app_ota_request_tick;
 

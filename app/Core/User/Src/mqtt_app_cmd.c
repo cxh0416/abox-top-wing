@@ -23,13 +23,22 @@
 #define RESPONSE_CACHE_SIZE 768U
 
 typedef enum { RESP_CTRL = 0, RESP_INTERNAL_CONFIG, RESP_INTERNAL_OTA } ResponseTopic;
-typedef struct { uint8_t valid; ResponseTopic topic; char payload[MQTT_APP_JSON_BUF_SZ]; } ResponseItem;
+typedef enum { OTA_REQ_IDLE = 0, OTA_REQ_DOWNLOADING, OTA_REQ_WAIT_MQTT } OtaRequestState;
+typedef struct
+{
+    uint8_t valid;
+    ResponseTopic topic;
+    uint16_t code;
+    char request_id[40];
+    char payload[MQTT_APP_JSON_BUF_SZ];
+} ResponseItem;
 typedef struct
 {
     uint8_t valid;
     uint8_t inflight;
     uint32_t tick;
     uint32_t digest;
+    uint16_t code;
     char request_id[40];
     char response[RESPONSE_CACHE_SIZE];
 } RequestCache;
@@ -37,7 +46,10 @@ typedef struct
 static ResponseItem g_queue[RESPONSE_QUEUE_DEPTH];
 static uint8_t g_queue_head, g_queue_count;
 static RequestCache g_cache[RESPONSE_CACHE_DEPTH];
-static uint8_t g_ota_request_pending;
+static OtaRequestState g_ota_request_state;
+static uint16_t g_ota_response_code;
+static uint32_t g_ota_response_error;
+static uint32_t g_ota_response_wait_tick;
 static char g_ota_request_id[40];
 
 static void copy_id(char dst[40], const char* src)
@@ -54,14 +66,29 @@ static const char* response_topic(ResponseTopic topic)
     return g_mqtt_app_ctrl_resp_topic;
 }
 
+static const char* command_topic_name(const char* topic)
+{
+    if (topic && strcmp(topic, g_mqtt_app_ctrl_topic) == 0) return "ctrl";
+    if (topic && strcmp(topic, g_mqtt_app_internal_config_topic) == 0) return "config";
+    if (topic && strcmp(topic, g_mqtt_app_internal_ota_topic) == 0) return "ota";
+    return "unknown";
+}
+
 void MQTT_App_ResetResponseState(void)
 {
     g_mqtt_app_resp_pending = 0U;
     g_mqtt_app_resp_publish_active = 0U;
     g_mqtt_app_resp_payload[0] = '\0';
     g_mqtt_app_resp_topic[0] = '\0';
+    g_mqtt_app_resp_request_id[0] = '\0';
+    g_mqtt_app_resp_code = 0U;
     memset(g_queue, 0, sizeof(g_queue));
     g_queue_head = g_queue_count = 0U;
+    g_ota_request_state = OTA_REQ_IDLE;
+    g_ota_response_code = 0U;
+    g_ota_response_error = 0U;
+    g_ota_response_wait_tick = 0U;
+    g_ota_request_id[0] = '\0';
 }
 
 void MQTT_App_PromoteQueuedResponse(void)
@@ -73,6 +100,8 @@ void MQTT_App_PromoteQueuedResponse(void)
     strncpy(g_mqtt_app_resp_payload, item->payload, sizeof(g_mqtt_app_resp_payload) - 1U);
     g_mqtt_app_resp_topic[sizeof(g_mqtt_app_resp_topic) - 1U] = '\0';
     g_mqtt_app_resp_payload[sizeof(g_mqtt_app_resp_payload) - 1U] = '\0';
+    copy_id(g_mqtt_app_resp_request_id, item->request_id);
+    g_mqtt_app_resp_code = item->code;
     memset(item, 0, sizeof(*item));
     g_queue_head = (uint8_t)((g_queue_head + 1U) % RESPONSE_QUEUE_DEPTH);
     g_queue_count--;
@@ -83,14 +112,15 @@ void MQTT_App_PromoteQueuedResponse(void)
 uint8_t MQTT_App_DropStalePendingResponse(uint32_t now, uint32_t stale_ms)
 {
     if (!g_mqtt_app_resp_pending || (now - g_mqtt_app_resp_tick) < stale_ms) return 0U;
-    APP_LOGW("MQTT", "response stale drop");
+    APP_LOGW("RESP", "stale rid=%s code=%u", g_mqtt_app_resp_request_id,
+             (unsigned)g_mqtt_app_resp_code);
     g_mqtt_app_resp_pending = 0U;
     g_mqtt_app_resp_publish_active = 0U;
     MQTT_App_PromoteQueuedResponse();
     return 1U;
 }
 
-static uint8_t queue_payload(ResponseTopic topic, const char* payload)
+static uint8_t queue_payload(ResponseTopic topic, const char* payload, const char* request_id, uint16_t code)
 {
     ResponseItem* item;
     uint8_t tail;
@@ -101,6 +131,8 @@ static uint8_t queue_payload(ResponseTopic topic, const char* payload)
         strncpy(g_mqtt_app_resp_payload, payload, sizeof(g_mqtt_app_resp_payload) - 1U);
         g_mqtt_app_resp_topic[sizeof(g_mqtt_app_resp_topic) - 1U] = '\0';
         g_mqtt_app_resp_payload[sizeof(g_mqtt_app_resp_payload) - 1U] = '\0';
+        copy_id(g_mqtt_app_resp_request_id, request_id);
+        g_mqtt_app_resp_code = code;
         g_mqtt_app_resp_pending = 1U;
         g_mqtt_app_resp_tick = HAL_GetTick();
         return 1U;
@@ -110,6 +142,8 @@ static uint8_t queue_payload(ResponseTopic topic, const char* payload)
     item = &g_queue[tail];
     item->valid = 1U;
     item->topic = topic;
+    item->code = code;
+    copy_id(item->request_id, request_id);
     strncpy(item->payload, payload, sizeof(item->payload) - 1U);
     item->payload[sizeof(item->payload) - 1U] = '\0';
     g_queue_count++;
@@ -173,12 +207,13 @@ static uint8_t cache_begin(const char* request_id, uint32_t digest, int* slot)
     return 0U;
 }
 
-static void cache_complete(const char* request_id, const char* response)
+static void cache_complete(const char* request_id, const char* response, uint16_t code)
 {
     int slot = cache_find(request_id, HAL_GetTick());
     if (slot < 0 || !response) return;
     g_cache[slot].inflight = 0U;
     g_cache[slot].tick = HAL_GetTick();
+    g_cache[slot].code = code;
     strncpy(g_cache[slot].response, response, sizeof(g_cache[slot].response) - 1U);
     g_cache[slot].response[sizeof(g_cache[slot].response) - 1U] = '\0';
 }
@@ -260,8 +295,11 @@ static void build_response(ResponseTopic topic, const char* request_id, uint16_t
                  "{\"version\":\"2.0\",\"timestamp\":0,\"data\":{\"product\":\"%s\",\"requestId\":\"%s\",\"code\":500,\"msg\":\"response too large\",\"result\":null}}",
                  PRODUCT_ID, request_id ? request_id : "");
     }
-    if (topic == RESP_CTRL) cache_complete(request_id, output);
-    if (!queue_payload(topic, output)) APP_LOGE("MQTT", "response queue full");
+    if (topic == RESP_CTRL) cache_complete(request_id, output, code);
+    if (!queue_payload(topic, output, request_id, code))
+        APP_LOGE("RESP", "queue full rid=%s code=%u", request_id ? request_id : "", (unsigned)code);
+    else
+        APP_LOGI("RESP", "queued rid=%s code=%u", request_id ? request_id : "", (unsigned)code);
 done:
     if (result) cJSON_Delete(result);
     if (data) cJSON_Delete(data);
@@ -377,35 +415,87 @@ static void handle_ota(const char* request_id, cJSON* params)
         size->valuedouble > 0x36800U || !parse_crc(crc, &parsed_crc))
     { build_response(RESP_INTERNAL_OTA, request_id, 4001U, WING_ACTION_NONE, 0U, 0); return; }
     if (!OtaService_IsReady()) { build_response(RESP_INTERNAL_OTA, request_id, 500U, WING_ACTION_NONE, 0U, 0); return; }
-    if (g_ota_request_pending || OtaService_IsBusy()) { build_response(RESP_INTERNAL_OTA, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
+    if (g_ota_request_state != OTA_REQ_IDLE || OtaService_IsBusy()) { build_response(RESP_INTERNAL_OTA, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
     snprintf(request.url, sizeof(request.url), "%s", url->valuestring);
     snprintf(request.version, sizeof(request.version), "%s", version->valuestring);
     request.size = (uint32_t)size->valuedouble;
     request.crc32 = parsed_crc;
     if (!OtaService_Start(&request)) { build_response(RESP_INTERNAL_OTA, request_id, 500U, WING_ACTION_NONE, 0U, 0); return; }
-    g_ota_request_pending = 1U;
+    g_ota_request_state = OTA_REQ_DOWNLOADING;
     copy_id(g_ota_request_id, request_id);
-    g_mqtt_app_ota_request_tick = HAL_GetTick();
+    APP_LOGI("OTA", "start rid=%s ver=%s size=%lu", g_ota_request_id, request.version,
+             (unsigned long)request.size);
 }
 
 void MQTT_App_HandleOtaServiceTask(void)
 {
+    uint32_t now = HAL_GetTick();
     uint32_t error;
-    if (!g_ota_request_pending) return;
+    if (g_ota_request_state == OTA_REQ_WAIT_MQTT)
+    {
+        if (MQTT_Core_IsReady())
+        {
+            cJSON* result = 0;
+            if (g_ota_response_code != 200U)
+            {
+                result = cJSON_CreateObject();
+                if (result) cJSON_AddNumberToObject(result, "error", g_ota_response_error);
+            }
+            APP_LOGI("OTA", "respond rid=%s code=%u", g_ota_request_id,
+                     (unsigned)g_ota_response_code);
+            build_response(RESP_INTERNAL_OTA, g_ota_request_id, g_ota_response_code,
+                           WING_ACTION_NONE, 0U, result);
+            if (g_ota_response_code == 200U)
+            {
+                /* Start the reset watchdog only after MQTT has reconnected and
+                 * the final response has actually been queued. */
+                g_mqtt_app_ota_request_tick = now;
+                g_mqtt_app_ota_reset_pending = 1U;
+            }
+            g_ota_request_state = OTA_REQ_IDLE;
+        }
+        else if (g_ota_response_code == 200U &&
+                 (now - g_ota_response_wait_tick) >= 120000U)
+        {
+            APP_LOGW("OTA", "response reconnect timeout rid=%s", g_ota_request_id);
+            g_mqtt_app_ota_request_tick = now;
+            g_mqtt_app_ota_reset_tick = now;
+            g_mqtt_app_ota_reset_pending = 1U;
+            g_ota_request_state = OTA_REQ_IDLE;
+        }
+        return;
+    }
+    if (g_ota_request_state != OTA_REQ_DOWNLOADING) return;
     if (OtaService_TakeInstallReady())
     {
-        build_response(RESP_INTERNAL_OTA, g_ota_request_id, 200U, WING_ACTION_NONE, 0U, 0);
-        g_mqtt_app_ota_reset_pending = 1U;
-        g_ota_request_pending = 0U;
+        APP_LOGI("OTA", "verified rid=%s wait=mqtt", g_ota_request_id);
+        g_ota_response_code = 200U;
+        g_ota_response_error = 0U;
+        g_ota_response_wait_tick = now;
+        g_ota_request_state = OTA_REQ_WAIT_MQTT;
     }
     else if (OtaService_TakeFailure(&error))
     {
-        cJSON* result = cJSON_CreateObject();
-        if (result) cJSON_AddNumberToObject(result, "error", error);
-        build_response(RESP_INTERNAL_OTA, g_ota_request_id, 500U, WING_ACTION_NONE, 0U, result);
-        g_ota_request_pending = 0U;
+        APP_LOGE("OTA", "failed rid=%s error=%lu wait=mqtt", g_ota_request_id,
+                 (unsigned long)error);
+        g_ota_response_code = 500U;
+        g_ota_response_error = error;
+        g_ota_response_wait_tick = now;
+        g_ota_request_state = OTA_REQ_WAIT_MQTT;
     }
 }
+
+#ifdef TOP_WING_HOST_TEST
+void MQTT_App_TestHandleOta(const char* request_id, cJSON* params)
+{
+    handle_ota(request_id, params);
+}
+
+uint8_t MQTT_App_TestOtaRequestState(void)
+{
+    return (uint8_t)g_ota_request_state;
+}
+#endif
 
 void MQTT_App_HandleWingResultTask(void)
 {
@@ -422,19 +512,38 @@ void MQTT_App_HandleCommandMessage(const char* topic, const char* payload)
     if (!topic || !payload || g_mqtt_app_ota_reset_pending) return;
     public_request = strcmp(topic, g_mqtt_app_ctrl_topic) == 0 ? 1U : 0U;
     if (!public_request && strcmp(topic, g_mqtt_app_internal_config_topic) != 0 &&
-        strcmp(topic, g_mqtt_app_internal_ota_topic) != 0) return;
+        strcmp(topic, g_mqtt_app_internal_ota_topic) != 0)
+    {
+        APP_LOGW("CMD", "reject topic=unknown reason=topic");
+        return;
+    }
     root = cJSON_Parse(payload);
-    if (!root) return;
+    if (!root)
+    {
+        APP_LOGW("CMD", "reject topic=%s reason=json", command_topic_name(topic));
+        return;
+    }
     data = cJSON_GetObjectItem(root, "data");
     version = cJSON_GetObjectItem(root, "version"); timestamp = cJSON_GetObjectItem(root, "timestamp");
-    if (!cJSON_IsObject(data)) goto done;
+    if (!cJSON_IsObject(data))
+    {
+        APP_LOGW("CMD", "reject topic=%s reason=data", command_topic_name(topic));
+        goto done;
+    }
     request_id = cJSON_GetObjectItem(data, "requestId");
-    if (!cJSON_IsString(request_id) || !request_id->valuestring || !request_id->valuestring[0] || strlen(request_id->valuestring) >= 40U) goto done;
+    if (!cJSON_IsString(request_id) || !request_id->valuestring || !request_id->valuestring[0] || strlen(request_id->valuestring) >= 40U)
+    {
+        APP_LOGW("CMD", "reject topic=%s reason=requestId", command_topic_name(topic));
+        goto done;
+    }
     request_text = request_id->valuestring;
     command = cJSON_GetObjectItem(data, "command"); params = cJSON_GetObjectItem(data, "params");
     if (!cJSON_IsString(version) || strcmp(version->valuestring, "2.0") != 0 || !cJSON_IsNumber(timestamp) ||
         !cJSON_IsString(command) || !cJSON_IsObject(params))
-    { build_response(public_request ? RESP_CTRL : RESP_INTERNAL_CONFIG, request_text, 4001U, WING_ACTION_NONE, public_request, 0); goto done; }
+    {
+        APP_LOGW("CMD", "reject rid=%s reason=envelope", request_text);
+        build_response(public_request ? RESP_CTRL : RESP_INTERNAL_CONFIG, request_text, 4001U, WING_ACTION_NONE, public_request, 0); goto done;
+    }
     if (public_request)
     {
         cJSON* product = cJSON_GetObjectItem(data, "product");
@@ -444,29 +553,47 @@ void MQTT_App_HandleCommandMessage(const char* topic, const char* payload)
         uint8_t duplicate;
         uint16_t code;
         if (!cJSON_IsString(product) || strcmp(product->valuestring, PRODUCT_ID) != 0)
-        { build_response(RESP_CTRL, request_text, 4004U, WING_ACTION_NONE, 1U, 0); goto done; }
+        { APP_LOGW("CMD", "reject rid=%s reason=product", request_text); build_response(RESP_CTRL, request_text, 4004U, WING_ACTION_NONE, 1U, 0); goto done; }
         if (strcmp(command->valuestring, "wing_control") != 0)
-        { build_response(RESP_CTRL, request_text, 4002U, WING_ACTION_NONE, 1U, 0); goto done; }
+        { APP_LOGW("CMD", "reject rid=%s reason=command", request_text); build_response(RESP_CTRL, request_text, 4002U, WING_ACTION_NONE, 1U, 0); goto done; }
         if (cJSON_IsString(action_node))
         {
             if (strcmp(action_node->valuestring, "ascend") == 0) action = WING_ACTION_ASCEND;
             else if (strcmp(action_node->valuestring, "descend") == 0) action = WING_ACTION_DESCEND;
             else if (strcmp(action_node->valuestring, "stop") == 0) action = WING_ACTION_STOP;
         }
-        if (action == WING_ACTION_NONE) { build_response(RESP_CTRL, request_text, 4001U, action, 1U, 0); goto done; }
+        if (action == WING_ACTION_NONE) { APP_LOGW("CMD", "reject rid=%s reason=action", request_text); build_response(RESP_CTRL, request_text, 4001U, action, 1U, 0); goto done; }
+        APP_LOGI("CMD", "rx rid=%s action=%s", request_text, WingAction_Name(action));
         duplicate = cache_begin(request_text, digest_action(command->valuestring, action_node->valuestring), &slot);
-        if (duplicate == 1U) goto done;
-        if (duplicate == 2U) { (void)queue_payload(RESP_CTRL, g_cache[slot].response); goto done; }
-        if (duplicate == 3U) { build_response(RESP_CTRL, request_text, 4001U, action, 1U, 0); goto done; }
+        if (duplicate == 1U) { APP_LOGI("CMD", "inflight duplicate rid=%s", request_text); goto done; }
+        if (duplicate == 2U)
+        {
+            APP_LOGI("CMD", "cached rid=%s", request_text);
+            (void)queue_payload(RESP_CTRL, g_cache[slot].response, request_text, g_cache[slot].code);
+            goto done;
+        }
+        if (duplicate == 3U) { APP_LOGW("CMD", "conflict rid=%s", request_text); build_response(RESP_CTRL, request_text, 4001U, action, 1U, 0); goto done; }
         code = WingController_Request(action, request_text);
         if (code) build_response(RESP_CTRL, request_text, code, action, 1U, 0);
     }
     else if (strcmp(topic, g_mqtt_app_internal_config_topic) == 0 && strcmp(command->valuestring, "internal_config") == 0)
+    {
+        cJSON* action_node = cJSON_GetObjectItem(params, "action");
+        APP_LOGI("CMD", "rx rid=%s action=%s", request_text,
+                 cJSON_IsString(action_node) ? action_node->valuestring : "invalid");
         handle_internal_config(request_text, params);
+    }
     else if (strcmp(topic, g_mqtt_app_internal_ota_topic) == 0 && strcmp(command->valuestring, "ota_upgrade") == 0)
+    {
+        APP_LOGI("CMD", "rx rid=%s action=ota_upgrade", request_text);
         handle_ota(request_text, params);
-    else build_response(strcmp(topic, g_mqtt_app_internal_ota_topic) == 0 ? RESP_INTERNAL_OTA : RESP_INTERNAL_CONFIG,
-                        request_text, 4002U, WING_ACTION_NONE, 0U, 0);
+    }
+    else
+    {
+        APP_LOGW("CMD", "reject rid=%s reason=unsupported", request_text);
+        build_response(strcmp(topic, g_mqtt_app_internal_ota_topic) == 0 ? RESP_INTERNAL_OTA : RESP_INTERNAL_CONFIG,
+                       request_text, 4002U, WING_ACTION_NONE, 0U, 0);
+    }
 done:
     cJSON_Delete(root);
 }

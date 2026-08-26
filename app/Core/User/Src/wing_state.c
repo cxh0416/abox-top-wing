@@ -9,6 +9,17 @@ static void copy_request_id(char dst[40], const char* src)
     dst[39] = '\0';
 }
 
+/*
+ * CAN feedback is written from an interrupt while the main loop supplies its
+ * previously sampled tick.  Treat a timestamp a few ticks in the future as
+ * zero elapsed time.  The signed delta still preserves normal HAL tick wrap.
+ */
+static uint32_t elapsed_ms(uint32_t now, uint32_t since)
+{
+    int32_t delta = (int32_t)(now - since);
+    return delta < 0 ? 0U : (uint32_t)delta;
+}
+
 static void refresh_motion(WingState* state)
 {
     WingSnapshot* s = &state->snapshot;
@@ -61,7 +72,7 @@ void WingState_Tick(WingState* state, uint32_t now)
         state->snapshot.feedback_age_ms = 0U;
         return;
     }
-    age = now - state->last_feedback_tick;
+    age = elapsed_ms(now, state->last_feedback_tick);
     state->snapshot.feedback_age_ms = age;
     if (age > WING_FEEDBACK_TIMEOUT_MS)
     {
@@ -74,7 +85,7 @@ void WingState_Tick(WingState* state, uint32_t now)
     state->snapshot.controller_online = 1U;
     if (state->raw_moving && state->motion_started_tick)
     {
-        state->snapshot.run_elapsed_ms = now - state->motion_started_tick;
+        state->snapshot.run_elapsed_ms = elapsed_ms(now, state->motion_started_tick);
         if (state->snapshot.run_elapsed_ms >= WING_MAX_RUNTIME_MS)
             WingState_LatchSafety(state, WING_SAFETY_MAX_RUNTIME);
     }

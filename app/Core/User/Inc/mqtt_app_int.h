@@ -26,6 +26,8 @@ extern uint32_t g_mqtt_app_resp_pub_ok_seq;
 extern uint32_t g_mqtt_app_resp_tick;
 extern char g_mqtt_app_resp_topic[128];
 extern char g_mqtt_app_resp_payload[MQTT_APP_JSON_BUF_SZ];
+extern char g_mqtt_app_resp_request_id[40];
+extern uint16_t g_mqtt_app_resp_code;
 
 extern volatile uint8_t g_mqtt_app_ota_reset_pending;
 extern uint32_t g_mqtt_app_ota_reset_tick;

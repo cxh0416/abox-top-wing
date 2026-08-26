@@ -985,6 +985,8 @@ void MQTT_Core_Task(void)
                 g_mqtt_rx_msg_pending = 0U;
                 __enable_irq();
 
+                APP_LOGI("MQTT", "rx topic=%s len=%u", g_mqtt_rx_pending_topic,
+                         (unsigned)strlen(g_mqtt_rx_pending_payload));
                 mqtt_dispatch_message(g_mqtt_rx_pending_topic, g_mqtt_rx_pending_payload);
                 g_mqtt_rx_pending_topic[0] = '\0';
                 g_mqtt_rx_pending_payload[0] = '\0';

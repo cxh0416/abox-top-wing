@@ -11,14 +11,19 @@
 #include "usart.h"
 #endif
 
-#define APP_LOG_LINE_COUNT 32U
-#define APP_LOG_LINE_SIZE 80U
+#define APP_LOG_LINE_COUNT 64U
+#define APP_LOG_LINE_SIZE 112U
 
 static char g_log_lines[APP_LOG_LINE_COUNT][APP_LOG_LINE_SIZE];
 static uint32_t g_log_ticks[APP_LOG_LINE_COUNT];
+static uint32_t g_log_sequences[APP_LOG_LINE_COUNT];
 static uint16_t g_log_wr = 0U;
 static uint16_t g_log_count = 0U;
 static uint16_t g_log_mqtt_rd = 0U;
+static uint32_t g_log_next_sequence = 1U;
+static uint32_t g_log_mqtt_sequence = 1U;
+static uint32_t g_log_mqtt_peek_end = 1U;
+static uint32_t g_log_mqtt_dropped = 0U;
 #if LOCKCTRL_EC800_AT_DIAG_UART5
 static uint16_t g_log_debug_rd = 0U;
 #endif
@@ -79,9 +84,14 @@ void AppLog_Clear(void)
 {
     memset(g_log_lines, 0, sizeof(g_log_lines));
     memset(g_log_ticks, 0, sizeof(g_log_ticks));
+    memset(g_log_sequences, 0, sizeof(g_log_sequences));
     g_log_wr = 0U;
     g_log_count = 0U;
     g_log_mqtt_rd = 0U;
+    g_log_next_sequence = 1U;
+    g_log_mqtt_sequence = 1U;
+    g_log_mqtt_peek_end = 1U;
+    g_log_mqtt_dropped = 0U;
 #if LOCKCTRL_EC800_AT_DIAG_UART5
     g_log_debug_rd = 0U;
 #endif
@@ -92,7 +102,7 @@ AppLogLevel_t AppLog_GetLevel(void) { return g_log_level; }
 
 void AppLog_Printf(AppLogLevel_t level, const char* tag, const char* fmt, ...)
 {
-    char msg[64];
+    char msg[96];
     va_list ap;
     int n;
     uint16_t idx;
@@ -106,6 +116,7 @@ void AppLog_Printf(AppLogLevel_t level, const char* tag, const char* fmt, ...)
 
     idx = g_log_wr;
     g_log_ticks[idx] = HAL_GetTick();
+    g_log_sequences[idx] = g_log_next_sequence++;
     snprintf(g_log_lines[idx], APP_LOG_LINE_SIZE, "%s %s %s\r\n", level_name(level), tag ? tag : "APP", msg);
     g_log_wr = (uint16_t)((g_log_wr + 1U) % APP_LOG_LINE_COUNT);
     if (g_log_count < APP_LOG_LINE_COUNT) g_log_count++;
@@ -182,6 +193,86 @@ uint16_t AppLog_ReadMqttLine(char* out, uint16_t out_sz)
 
     out[0] = '\0';
     return 0U;
+}
+
+static uint32_t AppLog_OldestSequence(void)
+{
+    return g_log_next_sequence - (uint32_t)g_log_count;
+}
+
+static int AppLog_IndexForSequence(uint32_t sequence)
+{
+    uint16_t i;
+    for (i = 0U; i < g_log_count; i++)
+    {
+        uint16_t idx = (uint16_t)((g_log_wr + APP_LOG_LINE_COUNT - g_log_count + i) % APP_LOG_LINE_COUNT);
+        if (g_log_sequences[idx] == sequence) return (int)idx;
+    }
+    return -1;
+}
+
+uint16_t AppLog_GetMqttPendingCount(void)
+{
+    uint32_t oldest = AppLog_OldestSequence();
+    uint32_t start = g_log_mqtt_sequence < oldest ? oldest : g_log_mqtt_sequence;
+    uint32_t pending = g_log_next_sequence - start;
+    return pending > 65535U ? 65535U : (uint16_t)pending;
+}
+
+uint8_t AppLog_PeekMqttLines(char lines[][APP_LOG_MQTT_LINE_SIZE], uint8_t max_lines)
+{
+    uint32_t oldest;
+    uint32_t sequence;
+    uint8_t count = 0U;
+
+    if (!lines || max_lines == 0U) return 0U;
+    if (max_lines > APP_LOG_MQTT_BATCH_MAX) max_lines = APP_LOG_MQTT_BATCH_MAX;
+
+    oldest = AppLog_OldestSequence();
+    if (g_log_mqtt_sequence < oldest)
+    {
+        g_log_mqtt_dropped += oldest - g_log_mqtt_sequence;
+        g_log_mqtt_sequence = oldest;
+    }
+    sequence = g_log_mqtt_sequence;
+
+    if (g_log_mqtt_dropped && count < max_lines)
+    {
+        snprintf(lines[count++], APP_LOG_MQTT_LINE_SIZE, "W LOG dropped=%lu\r\n",
+                 (unsigned long)g_log_mqtt_dropped);
+    }
+
+    while (sequence < g_log_next_sequence && count < max_lines)
+    {
+        int idx = AppLog_IndexForSequence(sequence);
+        if (idx >= 0)
+        {
+            uint16_t n = AppLog_FormatLine((uint16_t)idx, lines[count], APP_LOG_MQTT_LINE_SIZE);
+            if (n > 0U && !AppLog_IsDumpNoise(lines[count])) count++;
+        }
+        sequence++;
+    }
+
+    g_log_mqtt_peek_end = sequence;
+    /* Noise-only entries do not produce an MQTT packet, so consume them here. */
+    if (count == 0U && g_log_mqtt_dropped == 0U)
+    {
+        g_log_mqtt_sequence = sequence;
+    }
+    return count;
+}
+
+void AppLog_CommitMqttLines(void)
+{
+    uint32_t oldest = AppLog_OldestSequence();
+    if (g_log_mqtt_sequence < oldest) g_log_mqtt_sequence = oldest;
+    if (g_log_mqtt_peek_end > g_log_mqtt_sequence) g_log_mqtt_sequence = g_log_mqtt_peek_end;
+    g_log_mqtt_dropped = 0U;
+}
+
+void AppLog_AbortMqttLines(void)
+{
+    g_log_mqtt_peek_end = g_log_mqtt_sequence;
 }
 
 #if LOCKCTRL_EC800_AT_DIAG_UART5

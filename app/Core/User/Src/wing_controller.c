@@ -47,6 +47,8 @@ static uint8_t g_report_head;
 static uint8_t g_report_count;
 static uint32_t g_last_poll_tick;
 static uint32_t g_last_limit_query_tick;
+static uint32_t g_local_motion_probe_tick;
+static uint8_t g_local_motion_silenced;
 static uint8_t g_safety_sent;
 static uint8_t g_endpoint_stop_attempted;
 static CanDiagEvent g_can_diag[CAN_DIAG_QUEUE_DEPTH];
@@ -164,6 +166,30 @@ static uint32_t status_poll_interval(void)
     return WING_IDLE_STATUS_POLL_MS;
 }
 
+static void update_local_motion_silence(uint8_t moving, uint32_t now)
+{
+    uint8_t remote_direction =
+        (g_state.snapshot.active_action == WING_ACTION_ASCEND ||
+         g_state.snapshot.active_action == WING_ACTION_DESCEND) ? 1U : 0U;
+    uint8_t pending_direction =
+        (g_pending.active &&
+         (g_pending.action == WING_ACTION_ASCEND || g_pending.action == WING_ACTION_DESCEND)) ? 1U : 0U;
+
+    if (moving && !remote_direction && !pending_direction)
+    {
+        if (!g_local_motion_silenced)
+            APP_LOGI("WING", "local motion detected; suspend CAN queries");
+        g_local_motion_silenced = 1U;
+        g_local_motion_probe_tick = now;
+    }
+    else if (!moving && g_local_motion_silenced)
+    {
+        g_local_motion_silenced = 0U;
+        g_last_poll_tick = now;
+        APP_LOGI("WING", "local motion stopped; resume CAN queries");
+    }
+}
+
 static void push_can_diag(const WingCanMessage* msg, const uint8_t data[8], const char* request_id)
 {
     uint8_t tail;
@@ -248,6 +274,8 @@ void WingController_Init(void)
     g_report_head = g_report_count = 0U;
     g_last_poll_tick = HAL_GetTick();
     g_last_limit_query_tick = HAL_GetTick();
+    g_local_motion_probe_tick = HAL_GetTick();
+    g_local_motion_silenced = 0U;
     g_safety_sent = 0U;
     g_endpoint_stop_attempted = 0U;
     memset(g_can_diag, 0, sizeof(g_can_diag));
@@ -419,6 +447,7 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
         g_last_limit_query_tick = now - WING_LIMIT_RETRY_MS;
     }
     WingState_ApplyFeedback(&g_state, now, msg.position_mm, msg.fault_code, msg.moving);
+    update_local_motion_silence(msg.moving, now);
     if (!old_online) { g_controller_online_event = 1U; push_report(WING_REPORT_CONTROLLER_ONLINE); }
     if (!old_fault && msg.fault_code) push_report(WING_REPORT_FAULT_RAISED);
     else if (old_fault && !msg.fault_code) push_report(WING_REPORT_FAULT_CLEARED);
@@ -482,13 +511,21 @@ void WingController_Task(uint32_t now)
         }
     }
 
-    if ((now - g_last_poll_tick) >= status_poll_interval())
+    if (g_local_motion_silenced &&
+        (now - g_local_motion_probe_tick) >= WING_LOCAL_MOTION_PROBE_MS)
+    {
+        g_local_motion_probe_tick = now;
+        send_status_poll();
+    }
+    else if (!g_local_motion_silenced &&
+             (now - g_last_poll_tick) >= status_poll_interval())
     {
         g_last_poll_tick = now;
         send_status_poll();
     }
 
-    if (g_state.snapshot.controller_online && !g_state.snapshot.have_limits &&
+    if (!g_local_motion_silenced && g_state.snapshot.controller_online &&
+        !g_state.snapshot.have_limits &&
         (now - g_last_limit_query_tick) >= WING_LIMIT_RETRY_MS)
     {
         g_last_limit_query_tick = now;

@@ -31,7 +31,8 @@ int main(void)
     WingState_Init(&s);WingState_ApplyFeedback(&s,100,20,0,1);
     assert(WingState_FeedbackTimeoutMs(&s)==WING_IDLE_FEEDBACK_TIMEOUT_MS);
     WingState_Tick(&s,601);assert(s.snapshot.controller_online&&s.snapshot.motion_state==WING_MOTION_MOVING_UNKNOWN);
-    WingState_Tick(&s,2601);assert(!s.snapshot.controller_online&&s.snapshot.safety_reason==WING_SAFETY_FEEDBACK_TIMEOUT);
+    WingState_Tick(&s,2601);assert(!s.snapshot.controller_online&&s.snapshot.safety_reason==WING_SAFETY_NONE);
+    s.motion_started_tick=1;WingState_Tick(&s,120001);assert(s.snapshot.safety_reason==WING_SAFETY_NONE);
     WingState_ApplyFeedback(&s,700,12,0,0);WingState_ConfirmStop(&s,"r2",1);assert(s.snapshot.active_action==WING_ACTION_NONE);
     WingState_InvalidateLimits(&s);assert(!s.snapshot.have_limits&&s.snapshot.at_endpoint==WING_ENDPOINT_NONE);
     WingState_ApplyFeedback(&s,800,13,1,0);assert(WingState_AdmissionCode(&s,WING_ACTION_ASCEND)==5005);

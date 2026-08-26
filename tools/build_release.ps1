@@ -2,7 +2,7 @@
 param(
     [ValidateSet('Debug', 'Release')] [string] $Configuration = 'Release',
     [string] $OutputDirectory = '',
-    [string] $FirmwareVersion = 'top-flying-wing-1.0.8'
+    [string] $FirmwareVersion = 'top-flying-wing-1.0.9'
 )
 
 $ErrorActionPreference = 'Stop'

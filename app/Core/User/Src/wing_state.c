@@ -128,7 +128,8 @@ void WingState_Tick(WingState* state, uint32_t now)
     state->snapshot.feedback_age_ms = age;
     if (age > WingState_FeedbackTimeoutMs(state))
     {
-        if (state->raw_moving || state->snapshot.active_action != WING_ACTION_NONE)
+        if (state->snapshot.active_action == WING_ACTION_ASCEND ||
+            state->snapshot.active_action == WING_ACTION_DESCEND)
             WingState_LatchSafety(state, WING_SAFETY_FEEDBACK_TIMEOUT);
         state->snapshot.controller_online = 0U;
         refresh_motion(state);
@@ -138,7 +139,9 @@ void WingState_Tick(WingState* state, uint32_t now)
     if (state->raw_moving && state->motion_started_tick)
     {
         state->snapshot.run_elapsed_ms = elapsed_ms(now, state->motion_started_tick);
-        if (state->snapshot.run_elapsed_ms >= WING_MAX_RUNTIME_MS)
+        if ((state->snapshot.active_action == WING_ACTION_ASCEND ||
+             state->snapshot.active_action == WING_ACTION_DESCEND) &&
+            state->snapshot.run_elapsed_ms >= WING_MAX_RUNTIME_MS)
             WingState_LatchSafety(state, WING_SAFETY_MAX_RUNTIME);
     }
     refresh_motion(state);

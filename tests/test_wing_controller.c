@@ -104,22 +104,50 @@ static void test_status_poll_cadence(void)
     WingController_Task(1999U);
     assert(count_command('R', 'D') == 1U);
     WingController_Task(2000U);
-    assert(count_command('R', 'D') == 2U);
+    assert(count_command('R', 'D') == 1U);
 
     status(20U, 0U, 2001U);
     g_tick = 2010U;
     assert(WingController_Request(WING_ACTION_ASCEND, "poll-up") == 0U);
     ack('U', 'P', 2011U);
-    assert(count_command('R', 'D') == 3U);
+    assert(count_command('R', 'D') == 2U);
     status(21U, 1U, 2012U);
     WingController_Task(2111U);
-    assert(count_command('R', 'D') == 4U);
+    assert(count_command('R', 'D') == 3U);
+}
+
+static void test_local_motion_query_silence(void)
+{
+    g_tick = 0U;
+    g_tx_count = 0U;
+    WingController_Init();
+    status(10U, 0U, 10U);
+    WingController_Task(10U);
+    limits(100U, 10U, 11U);
+
+    status(20U, 1U, 1000U);
+    WingController_Task(2000U);
+    WingController_Task(4000U);
+    WingController_Task(120999U);
+    assert(count_command('R', 'D') == 0U);
+    assert(count_command('R', 'L') == 1U);
+    assert(count_command('S', 'T') == 0U);
+
+    WingController_Task(121000U);
+    assert(count_command('R', 'D') == 1U);
+    status(25U, 0U, 121001U);
+    WingController_Task(122000U);
+    assert(count_command('R', 'D') == 1U);
+    WingController_Task(122001U);
+    assert(count_command('R', 'D') == 2U);
+    assert(count_command('S', 'T') == 0U);
 }
 
 int main(void)
 {
     const WingSnapshot* snapshot;
     test_status_poll_cadence();
+    test_local_motion_query_silence();
     g_tick = 0U;
     g_tx_count = 0U;
     WingController_Init();

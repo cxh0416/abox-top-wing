@@ -97,7 +97,7 @@ uint8_t BootState_Load(BootStateRecord_t* state) { (void)state; return 0U; }
 int ABoxBootV2_DescriptorRead(ABoxBootV2Descriptor* descriptor) { (void)descriptor; return 0; }
 int ABoxBootV2_DescriptorValid(const ABoxBootV2Descriptor* descriptor) { (void)descriptor; return 0; }
 const char* ABoxBootV2App_StableSeedSource(void) { return "none"; }
-const char* TopFlyingWing_AppFwVersion(void) { return "top-flying-wing-1.0.8"; }
+const char* TopFlyingWing_AppFwVersion(void) { return "top-flying-wing-1.0.9"; }
 const char* OtaService_Phase(void) { return "IDLE"; }
 uint8_t MQTT_App_ScheduleMqttConfigTrial(const char* vid, const char* host, uint16_t port,
                                          const char* username, const char* password)
@@ -125,8 +125,8 @@ static cJSON* ota_params(void)
     cJSON* params = cJSON_CreateObject();
     assert(params);
     cJSON_AddStringToObject(params, "url",
-        "https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/top-flying-wing-1.0.8/top_flying_wing_app.bin");
-    cJSON_AddStringToObject(params, "version", "top-flying-wing-1.0.8");
+        "https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/top-flying-wing-1.0.9/top_flying_wing_app.bin");
+    cJSON_AddStringToObject(params, "version", "top-flying-wing-1.0.9");
     cJSON_AddNumberToObject(params, "size", 1234);
     cJSON_AddStringToObject(params, "crc32", "1234ABCD");
     return params;

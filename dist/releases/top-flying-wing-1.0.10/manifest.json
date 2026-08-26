@@ -1,0 +1,44 @@
+{
+  "manifest_version": 1,
+  "product": "top_flying_wing",
+  "firmware_version": "top-flying-wing-1.0.10",
+  "boot_version": "abox-boot-2.3.0",
+  "ota_scheme": "boot_v2_ufs",
+  "ota_downloader": "app",
+  "idle_status_poll_enabled": false,
+  "app_range": "0x08008000..0x0803E7FF",
+  "boot_state_pages": [
+    "0x0803E800",
+    "0x0803F000"
+  ],
+  "config_page": "0x0803F800",
+  "artifacts": [
+    {
+      "name": "TopFlyingWing_App.bin",
+      "size": 80300,
+      "load_address": "0x08008000",
+      "crc32": "C145FBE8",
+      "sha256": "338e39b8391b8f3d9ecbf0a34e10d23ff89138c4591fc8a2a97cc4fe3f01da51",
+      "includes_device_config": false,
+      "includes_boot_state": false
+    },
+    {
+      "name": "ABox_Boot.bin",
+      "size": 32768,
+      "load_address": "0x08000000",
+      "crc32": "F36320C9",
+      "sha256": "981409ef107d5f5c56a1a80fce107c0292e2c1165668c0279ba6158f24a61c63",
+      "includes_device_config": false,
+      "includes_boot_state": false
+    },
+    {
+      "name": "TopFlyingWing_Full.bin",
+      "size": 113068,
+      "load_address": "0x08000000",
+      "crc32": "2B4F9689",
+      "sha256": "73ebd977052df0466a9bea9c14c9a682d4f90fc2364983eb650b11e8ea0d2caa",
+      "includes_device_config": false,
+      "includes_boot_state": false
+    }
+  ]
+}

@@ -166,6 +166,19 @@ static uint32_t status_poll_interval(void)
     return WING_IDLE_STATUS_POLL_MS;
 }
 
+static uint8_t status_poll_enabled(void)
+{
+    WingAction action = g_state.snapshot.active_action;
+    if (g_pending.active || g_state.safety_stop_latched ||
+        action == WING_ACTION_ASCEND || action == WING_ACTION_DESCEND)
+        return 1U;
+#if TOP_WING_ENABLE_IDLE_STATUS_POLL
+    return 1U;
+#else
+    return 0U;
+#endif
+}
+
 static void update_local_motion_silence(uint8_t moving, uint32_t now)
 {
     uint8_t remote_direction =
@@ -517,7 +530,7 @@ void WingController_Task(uint32_t now)
         g_local_motion_probe_tick = now;
         send_status_poll();
     }
-    else if (!g_local_motion_silenced &&
+    else if (!g_local_motion_silenced && status_poll_enabled() &&
              (now - g_last_poll_tick) >= status_poll_interval())
     {
         g_last_poll_tick = now;

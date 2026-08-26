@@ -22,6 +22,20 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "Wing controller endpoint-stop host tests passed"
 
+$idlePollOffOut = Join-Path $root "tests\test_wing_controller_idle_poll_off.exe"
+& "D:\MinGW\bin\gcc.exe" -std=c11 -Wall -Wextra `
+  -DTOP_WING_CAN_BUS=2 -DTOP_WING_ENABLE_IDLE_STATUS_POLL=0 `
+  -I "$root\app\Core\User\Inc" `
+  -I "$root\tests\stubs" `
+  "$root\tests\test_wing_controller.c" `
+  "$root\app\Core\User\Src\wing_controller.c" `
+  "$root\app\Core\User\Src\wing_protocol.c" `
+  "$root\app\Core\User\Src\wing_state.c" -o $idlePollOffOut
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $idlePollOffOut
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "Wing controller idle-RD-disabled host tests passed"
+
 $logOut = Join-Path $root "tests\test_app_log.exe"
 & "D:\MinGW\bin\gcc.exe" -std=c11 -Wall -Wextra `
   -I "$root\tests\stubs" `

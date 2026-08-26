@@ -2,7 +2,8 @@
 param(
     [ValidateSet('Debug', 'Release')] [string] $Configuration = 'Release',
     [string] $OutputDirectory = '',
-    [string] $FirmwareVersion = 'top-flying-wing-1.0.9'
+    [string] $FirmwareVersion = 'top-flying-wing-1.0.9',
+    [switch] $DisableIdleStatusPoll
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,7 +23,12 @@ foreach ($required in @($toolchain, $bootLinker, $appLinker, $bootArtifact, $val
 & $validator -BootLinker $bootLinker -AppLinker $appLinker | Out-Host
 if (-not $?) { throw 'Flash layout validation failed' }
 
-& cmake -S $appSource -B $appBuild -G Ninja "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DCMAKE_BUILD_TYPE=$Configuration" | Out-Host
+$idleStatusPoll = if ($DisableIdleStatusPoll) { 'OFF' } else { 'ON' }
+& cmake -S $appSource -B $appBuild -G Ninja `
+    "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
+    "-DCMAKE_BUILD_TYPE=$Configuration" `
+    "-DTOP_FLYING_WING_APP_FW_VERSION=$FirmwareVersion" `
+    "-DTOP_WING_ENABLE_IDLE_STATUS_POLL=$idleStatusPoll" | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'App configure failed' }
 & cmake --build $appBuild --parallel 4 | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'App build failed' }
@@ -34,6 +40,7 @@ $packageArgs = @{
     BootPath = $bootArtifact
     AppPath = $appArtifact
     FirmwareVersion = $FirmwareVersion
+    IdleStatusPollEnabled = (-not $DisableIdleStatusPoll.IsPresent)
 }
 if ($OutputDirectory) { $packageArgs.OutputDirectory = $OutputDirectory }
 & (Join-Path $PSScriptRoot 'package_release.ps1') @packageArgs

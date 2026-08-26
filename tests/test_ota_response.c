@@ -114,6 +114,9 @@ const char* WingAction_Name(WingAction action) { (void)action; return "none"; }
 const char* WingMotionState_Name(WingMotionState state) { (void)state; return "stopped"; }
 const char* WingSafetyReason_Name(WingSafetyReason reason) { (void)reason; return ""; }
 const char* WingEndpoint_Name(WingEndpoint endpoint) { (void)endpoint; return ""; }
+const char* WingCanSession_Name(WingCanSession session) { (void)session; return "idle_silent"; }
+const char* WingControlOwner_Name(WingControlOwner owner) { (void)owner; return "none"; }
+const char* WingOperationPhase_Name(WingOperationPhase phase) { (void)phase; return "idle"; }
 uint16_t WingController_Request(WingAction action, const char* request_id)
 {
     (void)action; (void)request_id; return 0U;

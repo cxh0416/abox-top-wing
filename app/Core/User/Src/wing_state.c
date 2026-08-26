@@ -9,11 +9,6 @@ static void copy_request_id(char dst[40], const char* src)
     dst[39] = '\0';
 }
 
-/*
- * CAN feedback is written from an interrupt while the main loop supplies its
- * previously sampled tick.  Treat a timestamp a few ticks in the future as
- * zero elapsed time.  The signed delta still preserves normal HAL tick wrap.
- */
 static uint32_t elapsed_ms(uint32_t now, uint32_t since)
 {
     int32_t delta = (int32_t)(now - since);
@@ -23,7 +18,7 @@ static uint32_t elapsed_ms(uint32_t now, uint32_t since)
 static void refresh_motion(WingState* state)
 {
     WingSnapshot* s = &state->snapshot;
-    if (!s->controller_online) s->motion_state = WING_MOTION_OFFLINE;
+    if (!s->status_fresh) s->motion_state = WING_MOTION_UNKNOWN;
     else if (s->fault_code) s->motion_state = WING_MOTION_FAULT;
     else if (!state->raw_moving) s->motion_state = WING_MOTION_STOPPED;
     else if (s->active_action == WING_ACTION_ASCEND) s->motion_state = WING_MOTION_ASCENDING;
@@ -46,10 +41,13 @@ void WingState_Init(WingState* state)
 {
     if (!state) return;
     memset(state, 0, sizeof(*state));
-    state->snapshot.motion_state = WING_MOTION_OFFLINE;
+    state->snapshot.motion_state = WING_MOTION_UNKNOWN;
+    state->snapshot.can_session = WING_CAN_SESSION_IDLE_SILENT;
+    state->snapshot.operation_phase = WING_PHASE_IDLE;
 }
 
-void WingState_ApplyFeedback(WingState* state, uint32_t now, uint16_t position_mm, uint8_t fault_code, uint8_t moving)
+void WingState_ApplyFeedback(WingState* state, uint32_t now, uint16_t position_mm,
+                             uint8_t fault_code, uint8_t moving)
 {
     uint8_t was_moving;
     if (!state) return;
@@ -57,6 +55,8 @@ void WingState_ApplyFeedback(WingState* state, uint32_t now, uint16_t position_m
     state->last_feedback_tick = now;
     state->snapshot.have_feedback = 1U;
     state->snapshot.controller_online = 1U;
+    state->snapshot.controller_online_known = 1U;
+    state->snapshot.status_fresh = 1U;
     state->snapshot.feedback_age_ms = 0U;
     state->snapshot.position_mm = position_mm;
     state->snapshot.have_position = 1U;
@@ -106,42 +106,23 @@ uint8_t WingState_EndpointReached(const WingState* state, WingAction action)
     return 0U;
 }
 
-uint32_t WingState_FeedbackTimeoutMs(const WingState* state)
-{
-    if (state && (state->snapshot.active_action == WING_ACTION_ASCEND ||
-                  state->snapshot.active_action == WING_ACTION_DESCEND))
-        return WING_ACTIVE_FEEDBACK_TIMEOUT_MS;
-    return WING_IDLE_FEEDBACK_TIMEOUT_MS;
-}
-
 void WingState_Tick(WingState* state, uint32_t now)
 {
     uint32_t age;
     if (!state) return;
-    if (!state->snapshot.have_feedback)
+    if (state->snapshot.status_fresh)
     {
-        state->snapshot.controller_online = 0U;
-        state->snapshot.feedback_age_ms = 0U;
-        return;
-    }
-    age = elapsed_ms(now, state->last_feedback_tick);
-    state->snapshot.feedback_age_ms = age;
-    if (age > WingState_FeedbackTimeoutMs(state))
-    {
-        if (state->snapshot.active_action == WING_ACTION_ASCEND ||
-            state->snapshot.active_action == WING_ACTION_DESCEND)
+        age = elapsed_ms(now, state->last_feedback_tick);
+        state->snapshot.feedback_age_ms = age;
+        if (state->snapshot.can_session == WING_CAN_SESSION_REMOTE_RUNNING &&
+            age > WING_ACTIVE_FEEDBACK_TIMEOUT_MS)
             WingState_LatchSafety(state, WING_SAFETY_FEEDBACK_TIMEOUT);
-        state->snapshot.controller_online = 0U;
-        refresh_motion(state);
-        return;
     }
-    state->snapshot.controller_online = 1U;
-    if (state->raw_moving && state->motion_started_tick)
+    if (state->snapshot.can_session == WING_CAN_SESSION_REMOTE_RUNNING &&
+        state->motion_started_tick)
     {
         state->snapshot.run_elapsed_ms = elapsed_ms(now, state->motion_started_tick);
-        if ((state->snapshot.active_action == WING_ACTION_ASCEND ||
-             state->snapshot.active_action == WING_ACTION_DESCEND) &&
-            state->snapshot.run_elapsed_ms >= WING_MAX_RUNTIME_MS)
+        if (state->snapshot.run_elapsed_ms >= WING_MAX_RUNTIME_MS)
             WingState_LatchSafety(state, WING_SAFETY_MAX_RUNTIME);
     }
     refresh_motion(state);
@@ -149,29 +130,23 @@ void WingState_Tick(WingState* state, uint32_t now)
 
 uint16_t WingState_AdmissionCode(const WingState* state, WingAction action)
 {
-    const WingSnapshot* s;
     if (!state || action == WING_ACTION_NONE) return 4001U;
-    s = &state->snapshot;
-    if (action == WING_ACTION_STOP)
-    {
-        if (!s->controller_online) return 5002U;
-        return 0U;
-    }
-    if (!s->controller_online) return 5002U;
-    if (s->fault_code) return 5005U;
-    if (s->motion_state == WING_MOTION_UNKNOWN) return 5003U;
-    if (s->motion_state != WING_MOTION_STOPPED || s->active_action != WING_ACTION_NONE) return 4003U;
-    return 0U;
+    if (action == WING_ACTION_STOP) return 0U;
+    return state->snapshot.can_session == WING_CAN_SESSION_IDLE_SILENT ? 0U : 4003U;
 }
 
 void WingState_AcceptDirection(WingState* state, WingAction action, const char* request_id, uint32_t now)
 {
     if (!state || (action != WING_ACTION_ASCEND && action != WING_ACTION_DESCEND)) return;
     state->snapshot.active_action = action;
+    state->snapshot.control_owner = WING_CONTROL_OWNER_REMOTE;
+    state->snapshot.can_session = WING_CAN_SESSION_REMOTE_RUNNING;
+    state->snapshot.operation_phase = WING_PHASE_RUNNING;
     copy_request_id(state->snapshot.last_request_id, request_id);
     state->snapshot.safety_reason = WING_SAFETY_NONE;
     state->safety_stop_latched = 0U;
-    if (state->raw_moving && !state->motion_started_tick) state->motion_started_tick = now;
+    state->motion_started_tick = now;
+    state->snapshot.run_elapsed_ms = 0U;
     refresh_motion(state);
 }
 
@@ -194,7 +169,38 @@ void WingState_LatchSafety(WingState* state, WingSafetyReason reason)
     state->safety_stop_latched = 1U;
 }
 
-uint8_t WingState_NeedsSafetyStop(const WingState* state) { return state ? state->safety_stop_latched : 0U; }
+void WingState_SetSession(WingState* state, WingCanSession session,
+                          WingOperationPhase phase, WingControlOwner owner)
+{
+    if (!state) return;
+    state->snapshot.can_session = session;
+    state->snapshot.operation_phase = phase;
+    state->snapshot.control_owner = owner;
+    refresh_motion(state);
+}
+
+void WingState_SetIdleSilent(WingState* state, WingControlOwner owner)
+{
+    if (!state) return;
+    state->snapshot.can_session = WING_CAN_SESSION_IDLE_SILENT;
+    state->snapshot.operation_phase = WING_PHASE_IDLE;
+    state->snapshot.control_owner = owner;
+    state->snapshot.active_action = WING_ACTION_NONE;
+    state->snapshot.controller_online = 0U;
+    state->snapshot.controller_online_known = 0U;
+    state->snapshot.status_fresh = 0U;
+    state->snapshot.feedback_age_ms = 0U;
+    state->snapshot.run_elapsed_ms = 0U;
+    state->raw_moving = 0U;
+    state->motion_started_tick = 0U;
+    state->safety_stop_latched = 0U;
+    refresh_motion(state);
+}
+
+uint8_t WingState_NeedsSafetyStop(const WingState* state)
+{
+    return state ? state->safety_stop_latched : 0U;
+}
 
 const char* WingMotionState_Name(WingMotionState value)
 {
@@ -223,4 +229,31 @@ const char* WingEndpoint_Name(WingEndpoint value)
     if (value == WING_ENDPOINT_TOP) return "top";
     if (value == WING_ENDPOINT_BOTTOM) return "bottom";
     return "";
+}
+
+const char* WingCanSession_Name(WingCanSession value)
+{
+    if (value == WING_CAN_SESSION_PREFLIGHT) return "preflight";
+    if (value == WING_CAN_SESSION_REMOTE_RUNNING) return "remote_running";
+    if (value == WING_CAN_SESSION_STOPPING) return "stopping";
+    if (value == WING_CAN_SESSION_FAULT) return "fault";
+    return "idle_silent";
+}
+
+const char* WingControlOwner_Name(WingControlOwner value)
+{
+    if (value == WING_CONTROL_OWNER_REMOTE) return "remote";
+    if (value == WING_CONTROL_OWNER_LOCAL_SUSPECTED) return "local_suspected";
+    return "none";
+}
+
+const char* WingOperationPhase_Name(WingOperationPhase value)
+{
+    if (value == WING_PHASE_CHECKING_MOTION) return "checking_motion";
+    if (value == WING_PHASE_QUIET_GUARD) return "quiet_guard";
+    if (value == WING_PHASE_CHECKING_LIMITS) return "checking_limits";
+    if (value == WING_PHASE_STARTING) return "starting";
+    if (value == WING_PHASE_RUNNING) return "running";
+    if (value == WING_PHASE_STOPPING) return "stopping";
+    return "idle";
 }

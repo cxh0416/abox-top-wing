@@ -10,8 +10,8 @@ CAN_HandleTypeDef hcan1 = { 1U };
 CAN_HandleTypeDef hcan2 = { 2U };
 
 static uint32_t g_tick;
-static uint8_t g_tx[64][8];
-static uint8_t g_tx_count;
+static uint8_t g_tx[512][8];
+static uint16_t g_tx_count;
 static uint8_t g_rx[8];
 static uint8_t g_have_rx;
 
@@ -24,7 +24,7 @@ int HAL_CAN_AddTxMessage(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* header,
 {
     (void)hcan;
     assert(header->ExtId == WING_CAN_TX_ID && header->IDE == CAN_ID_EXT && header->DLC == 8U);
-    assert(g_tx_count < 64U);
+    assert(g_tx_count < 512U);
     memcpy(g_tx[g_tx_count++], data, 8U);
     if (mailbox) *mailbox = 0U;
     return HAL_OK;
@@ -49,6 +49,14 @@ int HAL_CAN_Start(CAN_HandleTypeDef* hcan) { (void)hcan; return HAL_OK; }
 int HAL_CAN_ActivateNotification(CAN_HandleTypeDef* hcan, uint32_t notification)
 { (void)hcan; (void)notification; return HAL_OK; }
 
+static void reset_controller(void)
+{
+    g_tick = 0U;
+    g_tx_count = 0U;
+    g_have_rx = 0U;
+    WingController_Init();
+}
+
 static void receive(const uint8_t data[8], uint32_t tick)
 {
     memcpy(g_rx, data, 8U);
@@ -58,11 +66,15 @@ static void receive(const uint8_t data[8], uint32_t tick)
     assert(!g_have_rx);
 }
 
-static void status(uint16_t position, uint8_t moving, uint32_t tick)
+static void status_with_fault(uint16_t position, uint8_t moving, uint8_t fault, uint32_t tick)
 {
-    uint8_t data[8] = { 'R', 'D', (uint8_t)(position >> 8), (uint8_t)position, 0U, moving, 0U, 0U };
+    uint8_t data[8] = { 'R', 'D', (uint8_t)(position >> 8), (uint8_t)position,
+                        fault, moving, 0U, 0U };
     receive(data, tick);
 }
+
+static void status(uint16_t position, uint8_t moving, uint32_t tick)
+{ status_with_fault(position, moving, 0U, tick); }
 
 static void limits(uint16_t top, uint16_t bottom, uint32_t tick)
 {
@@ -71,187 +83,200 @@ static void limits(uint16_t top, uint16_t bottom, uint32_t tick)
     receive(data, tick);
 }
 
-static void ack(char first, char second, uint32_t tick)
+static void ack(WingAction action, uint32_t tick)
 {
-    uint8_t data[8] = { (uint8_t)first, (uint8_t)second, 0U, 0U, 0U, 0U, 0U, 0U };
+    uint8_t data[8] = { 0U };
+    if (action == WING_ACTION_ASCEND) { data[0] = 'U'; data[1] = 'P'; }
+    else if (action == WING_ACTION_DESCEND) { data[0] = 'D'; data[1] = 'N'; }
+    else { data[0] = 'S'; data[1] = 'T'; }
     receive(data, tick);
 }
 
-static uint8_t count_command(char first, char second)
+static uint16_t count_command(char first, char second)
 {
-    uint8_t i, count = 0U;
+    uint16_t i, count = 0U;
     for (i = 0U; i < g_tx_count; ++i)
         if (g_tx[i][0] == (uint8_t)first && g_tx[i][1] == (uint8_t)second) count++;
     return count;
 }
 
-static void test_status_poll_cadence(void)
+static WingControlResult take_result(void)
 {
+    WingControlResult result;
+    assert(WingController_TakeResult(&result));
+    return result;
+}
+
+static void start_running(WingAction action, const char* rid, uint16_t position)
+{
+    WingControlResult result;
     g_tick = 0U;
-    g_tx_count = 0U;
-    WingController_Init();
-    status(10U, 0U, 10U);
-    WingController_Task(10U);
-    assert(count_command('R', 'L') == 1U);
-    assert(count_command('R', 'D') == 0U);
-    limits(100U, 10U, 11U);
-    WingController_Task(999U);
-    assert(count_command('R', 'D') == 0U);
-    WingController_Task(1000U);
-#if TOP_WING_ENABLE_IDLE_STATUS_POLL
+    assert(WingController_Request(action, rid) == 0U);
     assert(count_command('R', 'D') == 1U);
-#else
-    assert(count_command('R', 'D') == 0U);
-#endif
-
-    status(20U, 1U, 1001U);
-    WingController_Task(1999U);
-#if TOP_WING_ENABLE_IDLE_STATUS_POLL
+    status(position, 0U, 1U);
+    WingController_Task(250U);
     assert(count_command('R', 'D') == 1U);
-#else
-    assert(count_command('R', 'D') == 0U);
-#endif
-    WingController_Task(2000U);
-#if TOP_WING_ENABLE_IDLE_STATUS_POLL
-    assert(count_command('R', 'D') == 1U);
-#else
-    assert(count_command('R', 'D') == 0U);
-#endif
-
-    status(20U, 0U, 2001U);
-    g_tick = 2010U;
-    assert(WingController_Request(WING_ACTION_ASCEND, "poll-up") == 0U);
-    ack('U', 'P', 2011U);
-#if TOP_WING_ENABLE_IDLE_STATUS_POLL
+    WingController_Task(251U);
     assert(count_command('R', 'D') == 2U);
-#else
-    assert(count_command('R', 'D') == 1U);
-#endif
-    status(21U, 1U, 2012U);
-    WingController_Task(2111U);
-#if TOP_WING_ENABLE_IDLE_STATUS_POLL
+    status(position, 0U, 252U);
+    assert(count_command('R', 'L') == 1U);
+    limits(100U, 10U, 253U);
+    assert(count_command(action == WING_ACTION_ASCEND ? 'U' : 'D',
+                         action == WING_ACTION_ASCEND ? 'P' : 'N') == 1U);
+    ack(action, 254U);
     assert(count_command('R', 'D') == 3U);
-#else
-    assert(count_command('R', 'D') == 2U);
-#endif
+    status(position, 1U, 255U);
+    result = take_result();
+    assert(result.code == 200U && result.action == action && !strcmp(result.request_id, rid));
+    assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_REMOTE_RUNNING);
 }
 
-static void test_local_motion_query_silence(void)
+static void test_idle_silent_and_correlation(void)
 {
-    g_tick = 0U;
-    g_tx_count = 0U;
-    WingController_Init();
-    status(10U, 0U, 10U);
-    WingController_Task(10U);
-    limits(100U, 10U, 11U);
-
-    status(20U, 1U, 1000U);
-    WingController_Task(2000U);
-    WingController_Task(4000U);
-    WingController_Task(120999U);
-    assert(count_command('R', 'D') == 0U);
-    assert(count_command('R', 'L') == 1U);
-    assert(count_command('S', 'T') == 0U);
-
-    WingController_Task(121000U);
-    assert(count_command('R', 'D') == 1U);
-    status(25U, 0U, 121001U);
-    WingController_Task(122000U);
-    assert(count_command('R', 'D') == 1U);
-    WingController_Task(122001U);
-#if TOP_WING_ENABLE_IDLE_STATUS_POLL
-    assert(count_command('R', 'D') == 2U);
-#else
-    assert(count_command('R', 'D') == 1U);
-#endif
-    assert(count_command('S', 'T') == 0U);
-}
-
-#if !TOP_WING_ENABLE_IDLE_STATUS_POLL
-static void test_no_rd_without_remote_action(void)
-{
-    g_tick = 0U;
-    g_tx_count = 0U;
-    WingController_Init();
+    const WingSnapshot* snapshot;
+    reset_controller();
     WingController_Task(100U);
-    WingController_Task(1000U);
-    WingController_Task(10000U);
-    assert(count_command('R', 'D') == 0U);
-
-    status(10U, 0U, 10001U);
-    WingController_Task(10001U);
-    limits(100U, 10U, 10002U);
-    WingController_Task(11002U);
-    WingController_Task(20002U);
-    assert(count_command('R', 'D') == 0U);
-
-    status(20U, 0U, 20003U);
-    WingController_Task(20003U);
-    limits(100U, 10U, 20004U);
-    g_tick = 20005U;
-    assert(WingController_Request(WING_ACTION_ASCEND, "active-poll") == 0U);
-    WingController_Task(20105U);
-    assert(count_command('R', 'D') == 1U);
+    WingController_Task(300000U);
+    assert(g_tx_count == 0U);
+    status(30U, 1U, 300001U);
+    limits(100U, 10U, 300002U);
+    assert(g_tx_count == 0U);
+    snapshot = WingController_GetSnapshot();
+    assert(snapshot->motion_state == WING_MOTION_UNKNOWN);
+    assert(!snapshot->status_fresh && !snapshot->controller_online_known);
+    assert(!snapshot->have_position && !snapshot->have_limits);
+    assert(WingController_Request(WING_ACTION_STOP, "idle-stop") == 200U);
+    assert(count_command('S', 'T') == 0U);
 }
-#endif
+
+static void test_preflight_local_motion_rejected(void)
+{
+    WingControlResult result;
+    reset_controller();
+    assert(WingController_Request(WING_ACTION_ASCEND, "local") == 0U);
+    status(20U, 1U, 1U);
+    result = take_result();
+    assert(result.code == 4003U);
+    assert(count_command('S', 'T') == 0U && count_command('U', 'P') == 0U);
+    assert(WingController_GetSnapshot()->control_owner == WING_CONTROL_OWNER_LOCAL_SUSPECTED);
+    assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_IDLE_SILENT);
+}
+
+static void test_preflight_timeouts_and_limits(void)
+{
+    WingControlResult result;
+    reset_controller();
+    assert(WingController_Request(WING_ACTION_ASCEND, "no-rd") == 0U);
+    WingController_Task(300U);
+    result = take_result();
+    assert(result.code == 5002U && count_command('U', 'P') == 0U);
+
+    reset_controller();
+    assert(WingController_Request(WING_ACTION_ASCEND, "bad-limits") == 0U);
+    status(20U, 0U, 1U);
+    WingController_Task(251U);
+    status(20U, 0U, 252U);
+    limits(10U, 20U, 253U);
+    result = take_result();
+    assert(result.code == 5003U && count_command('U', 'P') == 0U);
+}
+
+static void test_endpoint_single_stop(void)
+{
+    reset_controller();
+    start_running(WING_ACTION_ASCEND, "endpoint", 50U);
+    WingController_Task(355U);
+    status(98U, 1U, 356U);
+    assert(count_command('S', 'T') == 1U);
+    status(99U, 1U, 357U);
+    WingController_Task(500U);
+    assert(count_command('S', 'T') == 1U);
+    ack(WING_ACTION_STOP, 501U);
+    status(100U, 0U, 502U);
+    assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_IDLE_SILENT);
+    assert(!WingController_GetSnapshot()->status_fresh);
+}
+
+static void test_conflict_and_unexpected_stop(void)
+{
+    reset_controller();
+    start_running(WING_ACTION_ASCEND, "reverse", 50U);
+    WingController_Task(355U); status(60U, 1U, 356U);
+    WingController_Task(456U); status(55U, 1U, 457U);
+    assert(count_command('S', 'T') == 0U);
+    WingController_Task(557U); status(54U, 1U, 558U);
+    assert(count_command('S', 'T') == 1U);
+    assert(WingController_GetSnapshot()->control_owner == WING_CONTROL_OWNER_LOCAL_SUSPECTED);
+
+    reset_controller();
+    start_running(WING_ACTION_DESCEND, "released", 50U);
+    WingController_Task(355U); status(45U, 0U, 356U);
+    assert(count_command('S', 'T') == 1U);
+}
+
+static void test_stop_preemption_and_safety(void)
+{
+    WingControlResult result;
+    reset_controller();
+    assert(WingController_Request(WING_ACTION_ASCEND, "preempted") == 0U);
+    status(20U, 0U, 1U);
+    assert(WingController_Request(WING_ACTION_STOP, "stop-now") == 0U);
+    assert(count_command('S', 'T') == 1U);
+    result = take_result();
+    assert(result.code == 5003U && result.action == WING_ACTION_ASCEND);
+    ack(WING_ACTION_STOP, 2U);
+    status(20U, 0U, 3U);
+    result = take_result();
+    assert(result.code == 200U && result.action == WING_ACTION_STOP);
+
+    reset_controller();
+    start_running(WING_ACTION_ASCEND, "feedback-timeout", 50U);
+    WingController_Task(756U);
+    assert(count_command('S', 'T') == 1U);
+    assert(WingController_GetSnapshot()->safety_reason == WING_SAFETY_FEEDBACK_TIMEOUT);
+}
+
+static void test_direction_change_fault_and_max_runtime(void)
+{
+    uint32_t tick;
+    reset_controller();
+    start_running(WING_ACTION_ASCEND, "switch-up", 50U);
+    assert(WingController_Request(WING_ACTION_DESCEND, "switch-down-early") == 4003U);
+    assert(WingController_Request(WING_ACTION_STOP, "switch-stop") == 0U);
+    ack(WING_ACTION_STOP, 256U);
+    status(50U, 0U, 257U);
+    (void)take_result();
+    g_tick = 258U;
+    assert(WingController_Request(WING_ACTION_DESCEND, "switch-down") == 0U);
+    assert(count_command('R', 'D') == 5U);
+
+    reset_controller();
+    start_running(WING_ACTION_ASCEND, "fault", 50U);
+    WingController_Task(355U);
+    status_with_fault(55U, 1U, 1U, 356U);
+    assert(count_command('S', 'T') == 1U);
+    assert(WingController_GetSnapshot()->safety_reason == WING_SAFETY_CONTROLLER_FAULT);
+
+    reset_controller();
+    start_running(WING_ACTION_ASCEND, "max-runtime", 50U);
+    for (tick = 355U; tick < 120255U; tick += 400U)
+    {
+        WingController_Task(tick);
+        status(50U, 1U, tick + 1U);
+    }
+    WingController_Task(120255U);
+    assert(count_command('S', 'T') == 1U);
+    assert(WingController_GetSnapshot()->safety_reason == WING_SAFETY_MAX_RUNTIME);
+}
 
 int main(void)
 {
-    const WingSnapshot* snapshot;
-    test_status_poll_cadence();
-    test_local_motion_query_silence();
-#if !TOP_WING_ENABLE_IDLE_STATUS_POLL
-    test_no_rd_without_remote_action();
-#endif
-    g_tick = 0U;
-    g_tx_count = 0U;
-    WingController_Init();
-
-    status(10U, 0U, 10U);
-    WingController_Task(10U);
-    assert(count_command('R', 'L') == 1U);
-    limits(100U, 10U, 11U);
-
-    g_tick = 20U;
-    assert(WingController_Request(WING_ACTION_ASCEND, "up-1") == 0U);
-    assert(count_command('U', 'P') == 1U);
-    ack('U', 'P', 21U);
-    status(50U, 1U, 22U);
-    status(97U, 1U, 23U);
-    assert(count_command('S', 'T') == 0U);
-    status(98U, 1U, 24U);
-    assert(count_command('S', 'T') == 1U);
-    status(99U, 1U, 25U);
-    assert(count_command('S', 'T') == 1U);
-    ack('S', 'T', 26U);
-    status(100U, 0U, 27U);
-    snapshot = WingController_GetSnapshot();
-    assert(snapshot->motion_state == WING_MOTION_STOPPED);
-    assert(snapshot->active_action == WING_ACTION_NONE);
-    status(100U, 0U, 28U);
-    g_tick = 29U;
-    assert(WingController_Request(WING_ACTION_STOP, "idle-stop") == 200U);
-    assert(count_command('S', 'T') == 1U);
-
-    status(50U, 1U, 30U);
-    snapshot = WingController_GetSnapshot();
-    assert(snapshot->motion_state == WING_MOTION_MOVING_UNKNOWN);
-    assert(snapshot->active_action == WING_ACTION_NONE);
-    assert(count_command('S', 'T') == 1U);
-    status(100U, 0U, 31U);
-
-    g_tick = 40U;
-    assert(WingController_Request(WING_ACTION_DESCEND, "down-1") == 0U);
-    assert(count_command('D', 'N') == 1U);
-    ack('D', 'N', 41U);
-    status(50U, 1U, 42U);
-    assert(WingController_Request(WING_ACTION_ASCEND, "reverse") == 4003U);
-    status(13U, 1U, 43U);
-    assert(count_command('S', 'T') == 1U);
-    status(12U, 1U, 44U);
-    assert(count_command('S', 'T') == 2U);
-    status(11U, 1U, 45U);
-    assert(count_command('S', 'T') == 2U);
-
+    test_idle_silent_and_correlation();
+    test_preflight_local_motion_rejected();
+    test_preflight_timeouts_and_limits();
+    test_endpoint_single_stop();
+    test_conflict_and_unexpected_stop();
+    test_stop_preemption_and_safety();
+    test_direction_change_fault_and_max_runtime();
     return 0;
 }

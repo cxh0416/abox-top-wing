@@ -36,13 +36,7 @@ set(TOP_WING_CAN_BUS "2" CACHE STRING "Top flying wing CAN port (1 or 2)")
 if(NOT TOP_WING_CAN_BUS MATCHES "^[12]$")
     message(FATAL_ERROR "TOP_WING_CAN_BUS must be 1 or 2")
 endif()
-set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.0.9" CACHE STRING "Top flying wing App firmware version")
-option(TOP_WING_ENABLE_IDLE_STATUS_POLL "Send RD status queries while no remote action is active" ON)
-if(TOP_WING_ENABLE_IDLE_STATUS_POLL)
-    set(TOP_WING_ENABLE_IDLE_STATUS_POLL_VALUE 1)
-else()
-    set(TOP_WING_ENABLE_IDLE_STATUS_POLL_VALUE 0)
-endif()
+set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.0.11" CACHE STRING "Top flying wing App firmware version")
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
@@ -91,7 +85,6 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     TOP_FLYING_WING_BOOT_V2_APP=1
     TOP_WING_CAN_BUS=${TOP_WING_CAN_BUS}
     TOP_FLYING_WING_APP_FW_VERSION="${TOP_FLYING_WING_APP_FW_VERSION}"
-    TOP_WING_ENABLE_IDLE_STATUS_POLL=${TOP_WING_ENABLE_IDLE_STATUS_POLL_VALUE}
 )
 
 # Remove wrong libob.a library dependency when using cpp files

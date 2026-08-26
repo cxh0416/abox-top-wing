@@ -250,8 +250,15 @@ void MQTT_App_AddWingSnapshot(cJSON* object)
         cJSON_AddStringToObject(object, "faultCode", fault);
     }
     else cJSON_AddNullToObject(object, "faultCode");
-    cJSON_AddBoolToObject(object, "controllerOnline", s->controller_online ? 1 : 0);
-    if (s->have_feedback) cJSON_AddNumberToObject(object, "feedbackAgeMs", s->feedback_age_ms);
+    if (s->controller_online_known)
+        cJSON_AddBoolToObject(object, "controllerOnline", s->controller_online ? 1 : 0);
+    else cJSON_AddNullToObject(object, "controllerOnline");
+    cJSON_AddBoolToObject(object, "statusFresh", s->status_fresh ? 1 : 0);
+    cJSON_AddStringToObject(object, "canSession", WingCanSession_Name(s->can_session));
+    cJSON_AddStringToObject(object, "controlOwner", WingControlOwner_Name(s->control_owner));
+    cJSON_AddStringToObject(object, "operationPhase", WingOperationPhase_Name(s->operation_phase));
+    if (s->status_fresh && s->have_feedback)
+        cJSON_AddNumberToObject(object, "feedbackAgeMs", s->feedback_age_ms);
     else cJSON_AddNullToObject(object, "feedbackAgeMs");
     add_nullable_string(object, "lastRequestId", s->last_request_id);
     cJSON_AddNumberToObject(object, "runElapsedMs", s->run_elapsed_ms);
@@ -264,9 +271,9 @@ static const char* message_for_code(uint16_t code)
     if (code == 202U) return "configuration trial started";
     if (code == 4001U) return "invalid request";
     if (code == 4002U) return "unsupported command";
-    if (code == 4003U) return "motion or command busy; stop first";
+    if (code == 4003U) return "local touch control active or command busy; release touch key and retry";
     if (code == 4004U) return "product mismatch";
-    if (code == 5002U) return "controller offline";
+    if (code == 5002U) return "controller unreachable during preflight";
     if (code == 5003U) return "controller feedback not confirmed";
     if (code == 5004U) return "controller rejected command";
     if (code == 5005U) return "controller fault";
@@ -359,7 +366,9 @@ static cJSON* device_info(void)
     cJSON_AddNumberToObject(obj, "canBus", TOP_WING_CAN_BUS);
     cJSON_AddNumberToObject(obj, "canBitrate", 500000U);
     cJSON_AddNumberToObject(obj, "feedbackTimeoutMs", WING_ACTIVE_FEEDBACK_TIMEOUT_MS);
-    cJSON_AddNumberToObject(obj, "idleFeedbackTimeoutMs", WING_IDLE_FEEDBACK_TIMEOUT_MS);
+    cJSON_AddStringToObject(obj, "canSessionMode", "remote_only_idle_silent");
+    cJSON_AddNumberToObject(obj, "queryTimeoutMs", WING_QUERY_TIMEOUT_MS);
+    cJSON_AddNumberToObject(obj, "preflightQuietMs", WING_PREFLIGHT_QUIET_MS);
     cJSON_AddNumberToObject(obj, "commandTimeoutMs", WING_COMMAND_TIMEOUT_MS);
     cJSON_AddNumberToObject(obj, "maxRuntimeMs", WING_MAX_RUNTIME_MS);
     return obj;

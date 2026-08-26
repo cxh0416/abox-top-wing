@@ -28,10 +28,15 @@ int main(void)
     assert(s.snapshot.at_endpoint==WING_ENDPOINT_TOP&&!strcmp(WingEndpoint_Name(s.snapshot.at_endpoint),"top"));
     assert(WingState_AdmissionCode(&s,WING_ACTION_DESCEND)==4003);
     WingState_Tick(&s,622);assert(!s.snapshot.controller_online&&s.snapshot.safety_reason==WING_SAFETY_FEEDBACK_TIMEOUT);
+    WingState_Init(&s);WingState_ApplyFeedback(&s,100,20,0,1);
+    assert(WingState_FeedbackTimeoutMs(&s)==WING_IDLE_FEEDBACK_TIMEOUT_MS);
+    WingState_Tick(&s,601);assert(s.snapshot.controller_online&&s.snapshot.motion_state==WING_MOTION_MOVING_UNKNOWN);
+    WingState_Tick(&s,2601);assert(!s.snapshot.controller_online&&s.snapshot.safety_reason==WING_SAFETY_FEEDBACK_TIMEOUT);
     WingState_ApplyFeedback(&s,700,12,0,0);WingState_ConfirmStop(&s,"r2",1);assert(s.snapshot.active_action==WING_ACTION_NONE);
     WingState_InvalidateLimits(&s);assert(!s.snapshot.have_limits&&s.snapshot.at_endpoint==WING_ENDPOINT_NONE);
     WingState_ApplyFeedback(&s,800,13,1,0);assert(WingState_AdmissionCode(&s,WING_ACTION_ASCEND)==5005);
     WingState_ApplyFeedback(&s,900,14,0,0);WingState_AcceptDirection(&s,WING_ACTION_ASCEND,"r3",900);
+    assert(WingState_FeedbackTimeoutMs(&s)==WING_ACTIVE_FEEDBACK_TIMEOUT_MS);
     WingState_ApplyFeedback(&s,901,14,0,1);s.motion_started_tick=1;WingState_ApplyFeedback(&s,120001,14,0,1);WingState_Tick(&s,120001);assert(s.snapshot.safety_reason==WING_SAFETY_MAX_RUNTIME);
 
     /* A CAN ISR may update feedback after the task sampled its `now` tick. */

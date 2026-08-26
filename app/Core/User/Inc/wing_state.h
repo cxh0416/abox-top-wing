@@ -4,7 +4,8 @@
 #include <stdint.h>
 #include "wing_protocol.h"
 
-#define WING_FEEDBACK_TIMEOUT_MS 500U
+#define WING_ACTIVE_FEEDBACK_TIMEOUT_MS 500U
+#define WING_IDLE_FEEDBACK_TIMEOUT_MS 2500U
 #define WING_MAX_RUNTIME_MS 120000U
 #define WING_ENDPOINT_TOLERANCE_MM 2U
 
@@ -67,6 +68,7 @@ void WingState_ApplyFeedback(WingState* state, uint32_t now, uint16_t position_m
 uint8_t WingState_ApplyLimits(WingState* state, uint16_t top_limit_mm, uint16_t bottom_limit_mm);
 void WingState_InvalidateLimits(WingState* state);
 uint8_t WingState_EndpointReached(const WingState* state, WingAction action);
+uint32_t WingState_FeedbackTimeoutMs(const WingState* state);
 void WingState_Tick(WingState* state, uint32_t now);
 uint16_t WingState_AdmissionCode(const WingState* state, WingAction action);
 void WingState_AcceptDirection(WingState* state, WingAction action, const char* request_id, uint32_t now);

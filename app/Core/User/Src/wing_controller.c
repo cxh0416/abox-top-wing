@@ -154,6 +154,16 @@ static void send_limit_query(void)
     if (!send_frame(data) && g_poll_send_fail_count < 65535U) g_poll_send_fail_count++;
 }
 
+static uint32_t status_poll_interval(void)
+{
+    WingAction action = g_state.snapshot.active_action;
+    if (!g_state.snapshot.have_feedback || !g_state.snapshot.controller_online ||
+        g_pending.active || g_state.safety_stop_latched ||
+        action == WING_ACTION_ASCEND || action == WING_ACTION_DESCEND)
+        return WING_ACTIVE_STATUS_POLL_MS;
+    return WING_IDLE_STATUS_POLL_MS;
+}
+
 static void push_can_diag(const WingCanMessage* msg, const uint8_t data[8], const char* request_id)
 {
     uint8_t tail;
@@ -472,7 +482,7 @@ void WingController_Task(uint32_t now)
         }
     }
 
-    if ((now - g_last_poll_tick) >= WING_STATUS_POLL_MS)
+    if ((now - g_last_poll_tick) >= status_poll_interval())
     {
         g_last_poll_tick = now;
         send_status_poll();

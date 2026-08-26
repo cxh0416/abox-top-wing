@@ -106,6 +106,14 @@ uint8_t WingState_EndpointReached(const WingState* state, WingAction action)
     return 0U;
 }
 
+uint32_t WingState_FeedbackTimeoutMs(const WingState* state)
+{
+    if (state && (state->snapshot.active_action == WING_ACTION_ASCEND ||
+                  state->snapshot.active_action == WING_ACTION_DESCEND))
+        return WING_ACTIVE_FEEDBACK_TIMEOUT_MS;
+    return WING_IDLE_FEEDBACK_TIMEOUT_MS;
+}
+
 void WingState_Tick(WingState* state, uint32_t now)
 {
     uint32_t age;
@@ -118,7 +126,7 @@ void WingState_Tick(WingState* state, uint32_t now)
     }
     age = elapsed_ms(now, state->last_feedback_tick);
     state->snapshot.feedback_age_ms = age;
-    if (age > WING_FEEDBACK_TIMEOUT_MS)
+    if (age > WingState_FeedbackTimeoutMs(state))
     {
         if (state->raw_moving || state->snapshot.active_action != WING_ACTION_NONE)
             WingState_LatchSafety(state, WING_SAFETY_FEEDBACK_TIMEOUT);

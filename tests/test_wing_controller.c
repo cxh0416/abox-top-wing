@@ -85,10 +85,43 @@ static uint8_t count_command(char first, char second)
     return count;
 }
 
+static void test_status_poll_cadence(void)
+{
+    g_tick = 0U;
+    g_tx_count = 0U;
+    WingController_Init();
+    status(10U, 0U, 10U);
+    WingController_Task(10U);
+    assert(count_command('R', 'L') == 1U);
+    assert(count_command('R', 'D') == 0U);
+    limits(100U, 10U, 11U);
+    WingController_Task(999U);
+    assert(count_command('R', 'D') == 0U);
+    WingController_Task(1000U);
+    assert(count_command('R', 'D') == 1U);
+
+    status(20U, 1U, 1001U);
+    WingController_Task(1999U);
+    assert(count_command('R', 'D') == 1U);
+    WingController_Task(2000U);
+    assert(count_command('R', 'D') == 2U);
+
+    status(20U, 0U, 2001U);
+    g_tick = 2010U;
+    assert(WingController_Request(WING_ACTION_ASCEND, "poll-up") == 0U);
+    ack('U', 'P', 2011U);
+    assert(count_command('R', 'D') == 3U);
+    status(21U, 1U, 2012U);
+    WingController_Task(2111U);
+    assert(count_command('R', 'D') == 4U);
+}
+
 int main(void)
 {
     const WingSnapshot* snapshot;
+    test_status_poll_cadence();
     g_tick = 0U;
+    g_tx_count = 0U;
     WingController_Init();
 
     status(10U, 0U, 10U);

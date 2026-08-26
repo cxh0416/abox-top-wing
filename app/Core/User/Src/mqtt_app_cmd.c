@@ -358,7 +358,8 @@ static cJSON* device_info(void)
     cJSON_AddNumberToObject(obj, "mqttPort", cfg->mqtt_port);
     cJSON_AddNumberToObject(obj, "canBus", TOP_WING_CAN_BUS);
     cJSON_AddNumberToObject(obj, "canBitrate", 500000U);
-    cJSON_AddNumberToObject(obj, "feedbackTimeoutMs", WING_FEEDBACK_TIMEOUT_MS);
+    cJSON_AddNumberToObject(obj, "feedbackTimeoutMs", WING_ACTIVE_FEEDBACK_TIMEOUT_MS);
+    cJSON_AddNumberToObject(obj, "idleFeedbackTimeoutMs", WING_IDLE_FEEDBACK_TIMEOUT_MS);
     cJSON_AddNumberToObject(obj, "commandTimeoutMs", WING_COMMAND_TIMEOUT_MS);
     cJSON_AddNumberToObject(obj, "maxRuntimeMs", WING_MAX_RUNTIME_MS);
     return obj;

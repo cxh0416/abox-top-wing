@@ -18,6 +18,7 @@ char g_mqtt_app_ctrl_resp_topic[128], g_mqtt_app_status_report_topic[128];
 char g_mqtt_app_internal_config_topic[128], g_mqtt_app_internal_config_resp_topic[128];
 char g_mqtt_app_internal_ota_topic[128], g_mqtt_app_internal_ota_resp_topic[128], g_mqtt_app_log_topic[128];
 uint32_t g_mqtt_app_last_hb_tick, g_mqtt_app_last_hb_ok_tick, g_mqtt_app_seq_no;
+uint8_t g_mqtt_app_first_hb;
 volatile uint8_t g_mqtt_app_hb_pending, g_mqtt_app_resp_pending, g_mqtt_app_resp_publish_active;
 uint32_t g_mqtt_app_resp_pub_ok_seq, g_mqtt_app_resp_tick;
 char g_mqtt_app_resp_topic[128], g_mqtt_app_resp_payload[MQTT_APP_JSON_BUF_SZ];
@@ -48,8 +49,8 @@ void MQTT_App_Init(const char* id)
     snprintf(g_mqtt_app_internal_ota_topic,sizeof(g_mqtt_app_internal_ota_topic),"/zxwl/abox/%s/internal/ota",id);
     snprintf(g_mqtt_app_internal_ota_resp_topic,sizeof(g_mqtt_app_internal_ota_resp_topic),"/zxwl/abox/%s/internal/ota/resp",id);
     snprintf(g_mqtt_app_log_topic,sizeof(g_mqtt_app_log_topic),"/zxwl/abox/%s/internal/log",id);
-    g_mqtt_app_last_hb_tick=g_mqtt_app_last_hb_ok_tick=HAL_GetTick();g_mqtt_app_seq_no=1U;g_mqtt_app_hb_pending=0U;
-    MQTT_App_ResetResponseState();g_mqtt_app_ota_reset_pending=0U;g_mqtt_app_ota_reset_tick=g_mqtt_app_ota_request_tick=0U;g_boot_trial_tick=g_boot_trial_hb=0U;
+    g_mqtt_app_last_hb_tick=g_mqtt_app_last_hb_ok_tick=HAL_GetTick();g_mqtt_app_seq_no=1U;g_mqtt_app_first_hb=1U;g_mqtt_app_hb_pending=0U;
+    MQTT_App_ResetResponseState();MQTT_App_ResetReportState();g_mqtt_app_ota_reset_pending=0U;g_mqtt_app_ota_reset_tick=g_mqtt_app_ota_request_tick=0U;g_boot_trial_tick=g_boot_trial_hb=0U;
 }
 
 uint8_t MQTT_App_ScheduleMqttConfigTrial(const char* vid,const char* host,uint16_t port,const char* user,const char* pass)
@@ -69,6 +70,6 @@ void MQTT_App_Task(void)
     MQTT_App_HandleStatusReportTask();if(MQTT_Core_IsPublishActive())return;MQTT_App_HandleHeartbeatTask();if(g_mqtt_app_hb_pending||MQTT_Core_IsPublishActive())return;MQTT_App_HandleLogReportTask();
 }
 void MQTT_App_OnMessage(const char* t,const char* p){if(!g_mqtt_app_ota_reset_pending)MQTT_App_HandleCommandMessage(t,p);}
-uint8_t MQTT_App_CanRunBackground(uint32_t guard){uint32_t n=HAL_GetTick(),p=g_mqtt_app_seq_no==1U?MQTT_APP_FIRST_HEARTBEAT_DELAY_MS:MQTT_APP_HEARTBEAT_PERIOD_MS;return !g_mqtt_app_ota_reset_pending&&!g_mqtt_app_resp_pending&&!g_mqtt_app_hb_pending&&MQTT_Core_CanRunBackgroundAt()&&(n-g_mqtt_app_last_hb_tick+guard)<p;}
+uint8_t MQTT_App_CanRunBackground(uint32_t guard){uint32_t n=HAL_GetTick(),p=g_mqtt_app_first_hb?MQTT_APP_FIRST_HEARTBEAT_DELAY_MS:MQTT_APP_HEARTBEAT_PERIOD_MS;return !g_mqtt_app_ota_reset_pending&&!g_mqtt_app_resp_pending&&!g_mqtt_app_hb_pending&&MQTT_Core_CanRunBackgroundAt()&&(n-g_mqtt_app_last_hb_tick+guard)<p;}
 const char* MQTT_App_GetCtrlTopic(void){return g_mqtt_app_ctrl_topic;}const char* MQTT_App_GetHeartbeatTopic(void){return g_mqtt_app_heartbeat_topic;}const char* MQTT_App_GetInternalConfigTopic(void){return g_mqtt_app_internal_config_topic;}const char* MQTT_App_GetInternalOtaTopic(void){return g_mqtt_app_internal_ota_topic;}
 const char* const* MQTT_App_GetSubTopics(void){static const char* t[MQTT_APP_SUB_TOPIC_COUNT];t[0]=g_mqtt_app_ctrl_topic;t[1]=g_mqtt_app_internal_config_topic;t[2]=g_mqtt_app_internal_ota_topic;return t;}uint8_t MQTT_App_GetSubTopicCount(void){return MQTT_APP_SUB_TOPIC_COUNT;}

@@ -1,8 +1,10 @@
 # 顶飞翼 A-BOX 内部运维协议
 
-版本：1.0
+文档修订：1.2（文件名保留 `1.0` 以兼容既有引用）
 
-适用固件：`top-flying-wing-1.0.0`
+当前核对固件：`top-flying-wing-1.0.13`
+
+接口兼容起点：`top-flying-wing-1.0.0`
 
 产品标识：`top_flying_wing`
 
@@ -10,7 +12,7 @@
 
 本文档描述 OTA 平台与顶飞翼 A-BOX 固件之间已经实现的内部运维接口，包括设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA。
 
-这些接口使用 `/internal/*` Topic，只供受控运维平台使用，不属于《车载 A-BOX 设备对接协议》中的公共业务接口。业务平台控制顶飞翼时仍只使用 `/ctrl`、`/ctrl/resp`、`/status/report` 和 `/heartbeat`，不得通过内部运维接口替代业务控制。
+这些接口使用 `/internal/*` Topic，只供受控运维平台使用，不属于 [A-BOX 飞翼设备业务协议 V3](A-BOX飞翼设备业务协议-V3.0.md) 中的公共业务接口。业务平台控制飞翼时仍只使用 `/ctrl`、`/ctrl/resp`、`/status/report` 和 `/heartbeat`，不得通过内部运维接口替代业务控制。
 
 当前固件没有格口映射、试开通道、锁板、RS485 或旧桌面上位机接口。
 
@@ -29,6 +31,8 @@
 | A-BOX → 平台 | 增量运行日志 | `/zxwl/abox/{deviceId}/internal/log` | 0 | 否 |
 
 A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于主动状态、心跳和日志发送；日志属于最低优先级的尽力上报。
+
+平台发布 `/ctrl`、`/internal/config` 和 `/internal/ota` 请求时使用 QoS 1，A-BOX 订阅这些 Topic 时也必须请求 QoS 1；订阅端不得以 QoS 0 将端到端交付等级降级。平台重试必须沿用原 `requestId`，设备按平台仓库的 [A-BOX 设备公共 MQTT 协议 V3](https://github.com/cxh0416/abox-platform-firmware/blob/master/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md) 的请求幂等规则处理。
 
 ### 2.2 请求结构
 
@@ -55,7 +59,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 | `data.params` | Object | 是 | 命令参数 |
 | `data.product` | String | 否 | 当前内部请求为兼容既有 A-BOX V2 平台允许省略；若携带应为 `top_flying_wing` |
 
-内部请求当前不依赖 `data.product` 做设备授权，设备身份由精确 Topic 中的 `{deviceId}` 和受控 Broker 权限确定。公共业务请求仍必须携带并校验 `data.product`。
+内部请求当前不依赖 `data.product` 做设备授权，设备身份由精确 Topic 中的 `{deviceId}` 和受控 Broker 权限确定。公共 V3 业务请求独立携带并校验 `data.deviceType=wing_actuator`，不改变本内部运维接口。
 
 ### 2.3 响应结构
 
@@ -134,15 +138,17 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
     "result": {
       "vid": "TFW000001",
       "product": "top_flying_wing",
-      "fwVersion": "top-flying-wing-1.0.0",
+      "fwVersion": "top-flying-wing-1.0.13",
       "bootVersion": "abox-boot-2.3.0",
       "bootDescriptorValid": true,
       "bootApiVersion": 1,
       "bootFeatures": 15,
       "otaScheme": "boot_v2_ufs",
       "otaDownloader": "app",
+      "stableSeedSource": "local_flash",
+      "otaBootstrapNeedsRevision": false,
       "otaState": "CONFIRMED",
-      "otaPhase": "idle",
+      "otaPhase": "IDLE",
       "otaReady": true,
       "otaBusy": false,
       "mqttHost": "36.153.162.171",
@@ -150,6 +156,9 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
       "canBus": 2,
       "canBitrate": 500000,
       "feedbackTimeoutMs": 500,
+      "canSessionMode": "remote_only_idle_silent",
+      "queryTimeoutMs": 300,
+      "preflightQuietMs": 250,
       "commandTimeoutMs": 1000,
       "maxRuntimeMs": 120000
     }
@@ -157,7 +166,9 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 }
 ```
 
-`bootVersion` 只有在 Boot descriptor 校验有效时可信；平台应结合 `bootDescriptorValid` 判断。响应不返回 MQTT 用户名、密码或 OTA CA 内容。
+`bootVersion` 只有在 Boot descriptor 校验有效时可信；平台应结合 `bootDescriptorValid` 判断。`stableSeedSource=local_flash` 表示稳定槽从当前运行 App 的本地 Flash 初始化，不依赖平台先发布一个引导 revision；因此 `otaBootstrapNeedsRevision` 固定为 `false`。`canSessionMode=remote_only_idle_silent` 表示完全空闲时不发送控制器查询，`queryTimeoutMs` 和 `preflightQuietMs` 分别给出单次预检查询超时与两次 `RD` 之间的静默时间。响应不返回 MQTT 用户名、密码或 OTA CA 内容。
+
+`otaPhase` 使用大写状态字符串，当前可能为 `IDLE`、`SEEDING_LOCAL`、`WAIT_MODEM`、`RETRY_WAIT`、`PROVISIONING`、`DOWNLOADING`、`VERIFYING`、`ERROR`，以及公共 HTTPS/UFS 下载器返回的细分阶段。平台不得按旧示例使用小写 `idle` 判断状态。
 
 ### 3.2 获取内存日志
 
@@ -247,9 +258,11 @@ A-BOX 在没有待发响应、心跳、状态或 OTA 工作时，从 RAM 日志�
 }
 ```
 
-每次报文当前只包含一行，发送间隔不短于 30 秒，使用 QoS 0 且不 Retain。它用于辅助排障，不保证完整、有序或必达，不能作为控制响应、故障状态或审计记录的替代品。
+每次报文包含 1～6 行；有积压且没有控制/内部响应、关键状态、到期心跳或 OTA 工作时，设备每 1 秒最多尝试发送一批。日志使用 QoS 0 且不 Retain，属于最低优先级的尽力上报，不保证完整、有序或必达，也不能作为控制响应、故障状态或审计记录的替代品。
 
 ## 5. Boot V2 OTA
+
+设备完成 EC800、CA 和 UFS 初始化后，会在 Boot State 为 `NORMAL` 或 `CONFIRMED` 时检查稳定槽。稳定槽缺失，或其版本、大小、CRC32 与当前运行 App 不一致时，App 从本地 Flash 将当前镜像写入 UFS 稳定槽，期间 `otaPhase=SEEDING_LOCAL`。校验完成后写入 `CONFIRMED` 稳定记录，不产生 `INSTALL_PENDING`，也不因这次初始化主动重启。该流程是本地回滚基线初始化，不是平台 OTA 任务。
 
 ### 5.1 请求
 
@@ -261,10 +274,10 @@ A-BOX 在没有待发响应、心跳、状态或 OTA 工作时，从 RAM 日志�
     "requestId": "4aeecdec-71b4-451f-bbc9-2f01c166b4a7",
     "command": "ota_upgrade",
     "params": {
-      "url": "https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/top-flying-wing-1.0.0/top_flying_wing_app.bin",
-      "version": "top-flying-wing-1.0.0",
-      "size": 67828,
-      "crc32": "F0BE8E81"
+      "url": "https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/top-flying-wing-1.0.13/top_flying_wing_app.bin",
+      "version": "top-flying-wing-1.0.13",
+      "size": 79708,
+      "crc32": "B31A8395"
     }
   }
 }

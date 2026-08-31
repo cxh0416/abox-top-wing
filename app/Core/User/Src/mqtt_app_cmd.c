@@ -17,6 +17,7 @@
 #include "wing_controller.h"
 
 #define PRODUCT_ID "top_flying_wing"
+#define PUBLIC_DEVICE_TYPE "wing_actuator"
 #define RESPONSE_QUEUE_DEPTH 2U
 #define RESPONSE_CACHE_DEPTH 4U
 #define RESPONSE_CACHE_TTL_MS 600000U
@@ -272,7 +273,7 @@ static const char* message_for_code(uint16_t code)
     if (code == 4001U) return "invalid request";
     if (code == 4002U) return "unsupported command";
     if (code == 4003U) return "local touch control active or command busy; release touch key and retry";
-    if (code == 4004U) return "product mismatch";
+    if (code == 4004U) return "deviceType mismatch";
     if (code == 5002U) return "controller unreachable during preflight";
     if (code == 5003U) return "controller feedback not confirmed";
     if (code == 5004U) return "controller rejected command";
@@ -288,30 +289,33 @@ static void build_response(ResponseTopic topic, const char* request_id, uint16_t
     cJSON* root = cJSON_CreateObject();
     cJSON* data = cJSON_CreateObject();
     if (!root || !data || !TimeBase_FormatUtcMs(timestamp, sizeof(timestamp))) goto done;
-    cJSON_AddStringToObject(root, "version", "2.0");
+    uint8_t public_response = topic == RESP_CTRL ? 1U : 0U;
+    (void)action;
+    (void)include_wing;
+    cJSON_AddStringToObject(root, "version", public_response ? MQTT_APP_PUBLIC_VERSION_STR : MQTT_APP_INTERNAL_VERSION_STR);
     cJSON_AddRawToObject(root, "timestamp", timestamp);
-    cJSON_AddStringToObject(data, "product", PRODUCT_ID);
+    cJSON_AddStringToObject(data, public_response ? "deviceType" : "product",
+                            public_response ? PUBLIC_DEVICE_TYPE : PRODUCT_ID);
     cJSON_AddStringToObject(data, "requestId", request_id ? request_id : "");
     cJSON_AddNumberToObject(data, "code", code);
     cJSON_AddStringToObject(data, "msg", message_for_code(code));
-    if (include_wing)
+    if (public_response)
     {
-        if (!result) result = cJSON_CreateObject();
-        if (result)
-        {
-            cJSON_AddStringToObject(result, "action", WingAction_Name(action));
-            cJSON_AddBoolToObject(result, "accepted", code == 200U ? 1 : 0);
-            MQTT_App_AddWingSnapshot(result);
-        }
+        if (result) { cJSON_Delete(result); result = 0; }
     }
-    if (result) { cJSON_AddItemToObject(data, "result", result); result = 0; }
+    else if (result) { cJSON_AddItemToObject(data, "result", result); result = 0; }
     else cJSON_AddNullToObject(data, "result");
     cJSON_AddItemToObject(root, "data", data); data = 0;
     if (!cJSON_PrintPreallocated(root, output, sizeof(output), 0))
     {
-        snprintf(output, sizeof(output),
-                 "{\"version\":\"2.0\",\"timestamp\":0,\"data\":{\"product\":\"%s\",\"requestId\":\"%s\",\"code\":500,\"msg\":\"response too large\",\"result\":null}}",
-                 PRODUCT_ID, request_id ? request_id : "");
+        if (public_response)
+            snprintf(output, sizeof(output),
+                     "{\"version\":\"3.0\",\"timestamp\":0,\"data\":{\"deviceType\":\"%s\",\"requestId\":\"%s\",\"code\":500,\"msg\":\"response too large\"}}",
+                     PUBLIC_DEVICE_TYPE, request_id ? request_id : "");
+        else
+            snprintf(output, sizeof(output),
+                     "{\"version\":\"2.0\",\"timestamp\":0,\"data\":{\"product\":\"%s\",\"requestId\":\"%s\",\"code\":500,\"msg\":\"response too large\",\"result\":null}}",
+                     PRODUCT_ID, request_id ? request_id : "");
     }
     if (topic == RESP_CTRL) cache_complete(request_id, output, code);
     if (!queue_payload(topic, output, request_id, code))
@@ -559,7 +563,9 @@ void MQTT_App_HandleCommandMessage(const char* topic, const char* payload)
     }
     request_text = request_id->valuestring;
     command = cJSON_GetObjectItem(data, "command"); params = cJSON_GetObjectItem(data, "params");
-    if (!cJSON_IsString(version) || strcmp(version->valuestring, "2.0") != 0 || !cJSON_IsNumber(timestamp) ||
+    if (!cJSON_IsString(version) ||
+        strcmp(version->valuestring, public_request ? MQTT_APP_PUBLIC_VERSION_STR : MQTT_APP_INTERNAL_VERSION_STR) != 0 ||
+        !cJSON_IsNumber(timestamp) ||
         !cJSON_IsString(command) || !cJSON_IsObject(params))
     {
         APP_LOGW("CMD", "reject rid=%s reason=envelope", request_text);
@@ -567,14 +573,14 @@ void MQTT_App_HandleCommandMessage(const char* topic, const char* payload)
     }
     if (public_request)
     {
-        cJSON* product = cJSON_GetObjectItem(data, "product");
+        cJSON* device_type = cJSON_GetObjectItem(data, "deviceType");
         cJSON* action_node = cJSON_GetObjectItem(params, "action");
         WingAction action = WING_ACTION_NONE;
         int slot;
         uint8_t duplicate;
         uint16_t code;
-        if (!cJSON_IsString(product) || strcmp(product->valuestring, PRODUCT_ID) != 0)
-        { APP_LOGW("CMD", "reject rid=%s reason=product", request_text); build_response(RESP_CTRL, request_text, 4004U, WING_ACTION_NONE, 1U, 0); goto done; }
+        if (!cJSON_IsString(device_type) || strcmp(device_type->valuestring, PUBLIC_DEVICE_TYPE) != 0)
+        { APP_LOGW("CMD", "reject rid=%s reason=deviceType", request_text); build_response(RESP_CTRL, request_text, 4004U, WING_ACTION_NONE, 1U, 0); goto done; }
         if (strcmp(command->valuestring, "wing_control") != 0)
         { APP_LOGW("CMD", "reject rid=%s reason=command", request_text); build_response(RESP_CTRL, request_text, 4002U, WING_ACTION_NONE, 1U, 0); goto done; }
         if (cJSON_IsString(action_node))

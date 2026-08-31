@@ -47,3 +47,6 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $otaOut
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "OTA response sequencing host tests passed"
+
+python "$root\tools\test_public_protocol_contract.py"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

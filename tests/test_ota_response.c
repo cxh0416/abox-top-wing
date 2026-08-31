@@ -22,6 +22,7 @@ static uint8_t ota_start_ok = 1U;
 static uint8_t ota_install_ready;
 static uint8_t ota_failed;
 static uint32_t ota_error;
+static uint16_t wing_request_code;
 
 char g_mqtt_app_device_id[64];
 char g_mqtt_app_heartbeat_topic[128];
@@ -51,6 +52,7 @@ uint32_t g_mqtt_app_ota_request_tick;
 
 void MQTT_App_TestHandleOta(const char* request_id, cJSON* params);
 uint8_t MQTT_App_TestOtaRequestState(void);
+void MQTT_App_HandleCommandMessage(const char* topic, const char* payload);
 
 uint32_t HAL_GetTick(void) { return fake_tick; }
 uint8_t MQTT_Core_IsReady(void) { return mqtt_ready; }
@@ -119,7 +121,7 @@ const char* WingControlOwner_Name(WingControlOwner owner) { (void)owner; return 
 const char* WingOperationPhase_Name(WingOperationPhase phase) { (void)phase; return "idle"; }
 uint16_t WingController_Request(WingAction action, const char* request_id)
 {
-    (void)action; (void)request_id; return 0U;
+    (void)action; (void)request_id; return wing_request_code;
 }
 uint8_t WingController_TakeResult(WingControlResult* result) { (void)result; return 0U; }
 
@@ -150,9 +152,45 @@ static int response_code(void)
     return value;
 }
 
+static void assert_public_response(const char* version, const char* device_type,
+                                   int code, uint8_t has_result)
+{
+    cJSON* root = cJSON_Parse(g_mqtt_app_resp_payload);
+    cJSON* data;
+    assert(root);
+    data = cJSON_GetObjectItem(root, "data");
+    assert(cJSON_IsObject(data));
+    assert(cJSON_IsString(cJSON_GetObjectItem(root, "version")));
+    assert(strcmp(cJSON_GetObjectItem(root, "version")->valuestring, version) == 0);
+    assert(cJSON_IsString(cJSON_GetObjectItem(data, "deviceType")));
+    assert(strcmp(cJSON_GetObjectItem(data, "deviceType")->valuestring, device_type) == 0);
+    assert(cJSON_GetObjectItem(data, "product") == 0);
+    assert((cJSON_GetObjectItem(data, "result") != 0) == has_result);
+    assert(cJSON_GetObjectItem(data, "code")->valueint == code);
+    cJSON_Delete(root);
+}
+
 int main(void)
 {
     cJSON* params;
+
+    strcpy(g_mqtt_app_ctrl_topic, "/zxwl/abox/W1/ctrl");
+    wing_request_code = 200U;
+    MQTT_App_ResetResponseState();
+    MQTT_App_HandleCommandMessage(g_mqtt_app_ctrl_topic,
+        "{\"version\":\"3.0\",\"timestamp\":1,\"data\":{\"deviceType\":\"wing_actuator\",\"requestId\":\"wing-ok\",\"command\":\"wing_control\",\"params\":{\"action\":\"ascend\"}}}");
+    assert(g_mqtt_app_resp_pending);
+    assert_public_response("3.0", "wing_actuator", 200, 0U);
+
+    MQTT_App_ResetResponseState();
+    MQTT_App_HandleCommandMessage(g_mqtt_app_ctrl_topic,
+        "{\"version\":\"2.0\",\"timestamp\":1,\"data\":{\"product\":\"top_flying_wing\",\"requestId\":\"wing-v2\",\"command\":\"wing_control\",\"params\":{\"action\":\"ascend\"}}}");
+    assert_public_response("3.0", "wing_actuator", 4001, 0U);
+
+    MQTT_App_ResetResponseState();
+    MQTT_App_HandleCommandMessage(g_mqtt_app_ctrl_topic,
+        "{\"version\":\"3.0\",\"timestamp\":1,\"data\":{\"deviceType\":\"locker_compartment\",\"requestId\":\"wing-type\",\"command\":\"wing_control\",\"params\":{\"action\":\"ascend\"}}}");
+    assert_public_response("3.0", "wing_actuator", 4004, 0U);
 
     MQTT_App_ResetResponseState();
     params = ota_params();

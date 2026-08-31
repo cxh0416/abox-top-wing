@@ -107,6 +107,11 @@ static WingControlResult take_result(void)
     return result;
 }
 
+static void drain_reports(void)
+{
+    while (WingController_TakeReportReason() != WING_REPORT_NONE) { }
+}
+
 static void start_running(WingAction action, const char* rid, uint16_t position)
 {
     WingControlResult result;
@@ -197,6 +202,17 @@ static void test_endpoint_single_stop(void)
     assert(!WingController_GetSnapshot()->status_fresh);
 }
 
+static void test_running_feedback_uses_periodic_mqtt_policy(void)
+{
+    reset_controller();
+    start_running(WING_ACTION_ASCEND, "periodic", 50U);
+    drain_reports();
+    WingController_Task(355U);
+    status(55U, 1U, 356U);
+    assert(WingController_TakeReportReason() == WING_REPORT_NONE);
+    assert(!strcmp(WingReportReason_Name(WING_REPORT_PERIODIC), "periodic"));
+}
+
 static void test_conflict_and_unexpected_stop(void)
 {
     reset_controller();
@@ -274,6 +290,7 @@ int main(void)
     test_idle_silent_and_correlation();
     test_preflight_local_motion_rejected();
     test_preflight_timeouts_and_limits();
+    test_running_feedback_uses_periodic_mqtt_policy();
     test_endpoint_single_stop();
     test_conflict_and_unexpected_stop();
     test_stop_preemption_and_safety();

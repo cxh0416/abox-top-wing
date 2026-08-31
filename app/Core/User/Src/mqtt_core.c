@@ -887,7 +887,7 @@ void MQTT_Core_Task(void)
             }
             mqtt_clear_flags();
             mqtt_set_state(MQTT_CORE_ST_WAIT_SUB);
-            mqtt_send_cmd("AT+QMTSUB=%d,1,\"%s\",0\r\n", g_mqtt_cfg.client_idx, g_mqtt_sub_topics[g_mqtt_rt.sub_index]);
+            mqtt_send_cmd("AT+QMTSUB=%d,1,\"%s\",1\r\n", g_mqtt_cfg.client_idx, g_mqtt_sub_topics[g_mqtt_rt.sub_index]);
             break;
 
         case MQTT_CORE_ST_WAIT_SUB:

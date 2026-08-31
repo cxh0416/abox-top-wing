@@ -425,7 +425,6 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
     if (g_session.state == SESSION_RUNNING)
     {
         assess_running_status(now);
-        push_report(WING_REPORT_STATE_CHANGED);
         return;
     }
 
@@ -522,6 +521,7 @@ WingReportReason WingController_TakeReportReason(void)
 
 const char* WingReportReason_Name(WingReportReason reason)
 {
+    if (reason == WING_REPORT_PERIODIC) return "periodic";
     if (reason == WING_REPORT_STATE_CHANGED) return "state_changed";
     if (reason == WING_REPORT_CONTROLLER_OFFLINE) return "controller_offline";
     if (reason == WING_REPORT_CONTROLLER_ONLINE) return "controller_online";
@@ -530,5 +530,5 @@ const char* WingReportReason_Name(WingReportReason reason)
     if (reason == WING_REPORT_SAFETY_STOP) return "safety_stop";
     if (reason == WING_REPORT_ENDPOINT_STOP) return "endpoint_stop";
     if (reason == WING_REPORT_CONTROL_CONFLICT) return "control_conflict";
-    return "periodic";
+    return "unknown";
 }

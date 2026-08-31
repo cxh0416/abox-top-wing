@@ -19,6 +19,7 @@ extern char g_mqtt_app_log_topic[128];
 extern uint32_t g_mqtt_app_last_hb_tick;
 extern uint32_t g_mqtt_app_last_hb_ok_tick;
 extern uint32_t g_mqtt_app_seq_no;
+extern uint8_t g_mqtt_app_first_hb;
 extern volatile uint8_t g_mqtt_app_hb_pending;
 extern volatile uint8_t g_mqtt_app_resp_pending;
 extern volatile uint8_t g_mqtt_app_resp_publish_active;
@@ -45,6 +46,7 @@ void MQTT_App_HandleOtaServiceTask(void);
 void MQTT_App_HandleHeartbeatTask(void);
 void MQTT_App_HandleStatusReportTask(void);
 void MQTT_App_HandleLogReportTask(void);
+void MQTT_App_ResetReportState(void);
 void MQTT_App_AddWingSnapshot(cJSON* object);
 
 #endif

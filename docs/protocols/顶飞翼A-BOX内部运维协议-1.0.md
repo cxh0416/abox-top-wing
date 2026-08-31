@@ -2,7 +2,7 @@
 
 文档修订：1.2（文件名保留 `1.0` 以兼容既有引用）
 
-当前核对固件：`top-flying-wing-1.0.13`
+当前核对固件：`top-flying-wing-1.0.14`
 
 接口兼容起点：`top-flying-wing-1.0.0`
 
@@ -138,7 +138,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
     "result": {
       "vid": "TFW000001",
       "product": "top_flying_wing",
-      "fwVersion": "top-flying-wing-1.0.13",
+      "fwVersion": "top-flying-wing-1.0.14",
       "bootVersion": "abox-boot-2.3.0",
       "bootDescriptorValid": true,
       "bootApiVersion": 1,
@@ -274,8 +274,8 @@ A-BOX 在没有待发响应、心跳、状态或 OTA 工作时，从 RAM 日志�
     "requestId": "4aeecdec-71b4-451f-bbc9-2f01c166b4a7",
     "command": "ota_upgrade",
     "params": {
-      "url": "https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/top-flying-wing-1.0.13/top_flying_wing_app.bin",
-      "version": "top-flying-wing-1.0.13",
+      "url": "https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/top-flying-wing-1.0.14/top_flying_wing_app.bin",
+      "version": "top-flying-wing-1.0.14",
       "size": 79708,
       "crc32": "B31A8395"
     }

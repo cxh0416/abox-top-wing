@@ -8,7 +8,7 @@
 
 固件产品标识：`top_flying_wing`（仅用于固件发布和内部运维）
 
-当前核对固件：`top-flying-wing-1.0.13`
+当前核对固件：`top-flying-wing-1.0.14`
 
 ## 1. 平台最小对接面
 

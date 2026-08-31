@@ -14,6 +14,7 @@
 #define LOG_PERIOD_MS 1000U
 #define STATUS_QOS1_RETRY_MAX 2U
 static char json_buf[MQTT_APP_JSON_BUF_SZ];
+static char status_json_buf[MQTT_APP_JSON_BUF_SZ];
 static char log_lines[APP_LOG_MQTT_BATCH_MAX][APP_LOG_MQTT_LINE_SIZE];
 static uint8_t log_publish_active;
 static uint32_t log_publish_ok_seq;
@@ -160,14 +161,14 @@ void MQTT_App_HandleStatusReportTask(void)
         MQTT_App_AddWingSnapshot(data);
         cJSON_AddItemToObject(root, "data", data);
         data = 0;
-        if (!cJSON_PrintPreallocated(root, json_buf, sizeof(json_buf), 0)) goto done;
+        if (!cJSON_PrintPreallocated(root, status_json_buf, sizeof(status_json_buf), 0)) goto done;
         status_publish_qos = status_pending == WING_REPORT_PERIODIC ? 0U : 1U;
         status_payload_ready = 1U;
         status_retry_count = 0U;
         g_mqtt_app_seq_no++;
     }
 
-    if (MQTT_Core_PublishEx(g_mqtt_app_status_report_topic, json_buf,
+    if (MQTT_Core_PublishEx(g_mqtt_app_status_report_topic, status_json_buf,
                             status_publish_qos, 1U))
     {
         status_publish_active = 1U;

@@ -30,7 +30,9 @@ def main() -> None:
     require(heartbeat_source, 'cJSON_AddStringToObject(data, "reportReason", report_reason)', "mqtt_app_hb.c")
     if 'cJSON_AddStringToObject(data, "reason"' in heartbeat_source:
         raise AssertionError("public status still sends legacy reason alias")
-    require(version_header, '"top-flying-wing-1.0.13"', "app_version.h")
+    require(version_header, '"top-flying-wing-1.0.14"', "app_version.h")
+    require(heartbeat_source, "static char status_json_buf[MQTT_APP_JSON_BUF_SZ]", "mqtt_app_hb.c")
+    require(heartbeat_source, "MQTT_Core_PublishEx(g_mqtt_app_status_report_topic, status_json_buf", "mqtt_app_hb.c")
 
     protocol_paths = [
         WORKSPACE / "ABox_Platform/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md",

@@ -36,7 +36,7 @@ set(TOP_WING_CAN_BUS "2" CACHE STRING "Top flying wing CAN port (1 or 2)")
 if(NOT TOP_WING_CAN_BUS MATCHES "^[12]$")
     message(FATAL_ERROR "TOP_WING_CAN_BUS must be 1 or 2")
 endif()
-set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.0.13" CACHE STRING "Top flying wing App firmware version")
+set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.0.14" CACHE STRING "Top flying wing App firmware version")
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)

@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Debug', 'Release')] [string] $Configuration = 'Release',
-    [string] $OutputDirectory = '',
+    [ValidateSet('Release')] [string] $Configuration = 'Release',
     [string] $FirmwareVersion = 'top-flying-wing-1.0.14'
 )
 
@@ -38,6 +37,5 @@ $packageArgs = @{
     AppPath = $appArtifact
     FirmwareVersion = $FirmwareVersion
 }
-if ($OutputDirectory) { $packageArgs.OutputDirectory = $OutputDirectory }
 & (Join-Path $PSScriptRoot 'package_release.ps1') @packageArgs
 exit $LASTEXITCODE

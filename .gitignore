@@ -24,11 +24,14 @@ app/MDK-ARM/.vscode/
 __pycache__/
 *.py[cod]
 build/
-dist/
-!dist/
+dist/*
 !dist/ABox_Boot.bin
-!dist/releases/
-!dist/releases/**
+!dist/TopFlyingWing_App.bin
+!dist/TopFlyingWing_Full.bin
+!dist/manifest.json
+!dist/release.manifest.json
+.dist-staging-*/
+.dist-previous-*/
 out/
 
 # Local editor and OS noise

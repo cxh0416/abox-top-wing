@@ -10,7 +10,7 @@
 - `platform/targets/stm32f105_abox_boot/`：公共平台完整 Boot 目标，只负责安装、试运行确认与回滚，不联网下载。
 - `docs/vendor/`：厂家 CAN/控制器资料，仅作为设备端帧依据。
 - `docs/protocols/`：按公共基础、产品业务 Profile 和内部运维接口拆分的协议文档。
-- `dist/`：正式本地构建产物及校验清单。
+- `dist/`：仅保存最新正式版的 App、Boot、Full 和校验清单；每次正式打包成功后整体替换，不保存历史版本或诊断包。
 
 ## MQTT 接口边界
 
@@ -34,7 +34,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\test_host.ps1
 python .\tools\test_boot_v2_contract.py
 ```
 
-上述脚本默认构建 `top-flying-wing-1.0.14`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
+上述脚本默认构建 `top-flying-wing-1.0.14`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。打包先生成完整临时制品，成功后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
 
 App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。Full 只拼接到 App 实际末尾，不包含配置页和 Boot State。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
 

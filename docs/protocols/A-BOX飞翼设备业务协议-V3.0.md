@@ -6,13 +6,11 @@
 
 设备类型：`wing_actuator`
 
-当前核对固件：`top-flying-wing-1.0.14`
-
 ## 1. 协议范围
 
 本文档只定义平台与飞翼设备之间稳定、可观察的公共业务接口，适用于所有使用该设备能力的项目。固件产品名、厂家 CAN、控制器轮询、预检步骤、内部状态机、超时配置和故障恢复算法不属于公共平台协议。
 
-通用报文、QoS、心跳、公共响应码和请求幂等遵循平台仓库的 [A-BOX 设备公共 MQTT 协议](https://github.com/cxh0416/abox-platform-firmware/blob/master/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md)。设备信息、日志、配置和 OTA 见 [顶飞翼 A-BOX 内部运维协议](顶飞翼A-BOX内部运维协议-1.0.md)。
+通用报文、QoS、心跳、公共响应码和请求幂等遵循 [A-BOX 设备公共 MQTT 协议](https://github.com/cxh0416/abox-platform-firmware/blob/master/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md)。设备运维接口和内部实现不属于本文范围。
 
 平台只需实现以下 4 个公共 Topic：
 
@@ -174,7 +172,7 @@ Retain：是
 
 平台订阅该 Topic 时请求 QoS 1。平台必须按 `reportId` 去重，并阻止较旧 `timestamp` 覆盖较新状态；QoS 0 周期样本允许丢失和抖动。Retain 报告只表示最近状态，不替代心跳在线判定。
 
-## 6. 平台最小验收
+## 6. 接入约束
 
 - 只实现本 Profile 声明的 4 个公共 Topic；
 - 控制请求以及响应、状态订阅使用 QoS 1；

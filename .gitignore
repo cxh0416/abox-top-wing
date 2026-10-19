@@ -24,12 +24,8 @@ app/MDK-ARM/.vscode/
 __pycache__/
 *.py[cod]
 build/
-dist/*
-!dist/ABox_Boot.bin
-!dist/TopFlyingWing_App.bin
-!dist/TopFlyingWing_Full.bin
-!dist/manifest.json
-!dist/release.manifest.json
+# Product delivery artifacts, including manifests, stay local.
+/dist/
 .dist-staging-*/
 .dist-previous-*/
 out/

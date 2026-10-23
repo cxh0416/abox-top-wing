@@ -32,7 +32,7 @@
 
 A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于主动状态、心跳和日志发送；日志属于最低优先级的尽力上报。
 
-平台发布 `/ctrl`、`/internal/config` 和 `/internal/ota` 请求时使用 QoS 1，A-BOX 订阅这些 Topic 时也必须请求 QoS 1；订阅端不得以 QoS 0 将端到端交付等级降级。平台重试必须沿用原 `requestId`，设备按平台仓库的 [A-BOX 设备公共 MQTT 协议 V3](https://github.com/cxh0416/abox-platform-firmware/blob/master/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md) 的请求幂等规则处理。
+平台发布 `/ctrl`、`/internal/config` 和 `/internal/ota` 请求时使用 QoS 1，A-BOX 订阅这些 Topic 时也必须请求 QoS 1；订阅端不得以 QoS 0 将端到端交付等级降级。平台重试必须沿用原 `requestId`，设备按平台仓库的 [A-BOX 设备公共 MQTT 协议 V3](https://github.com/cxh0416/abox-platform-firmware/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md) 的请求幂等规则处理。
 
 ### 2.2 请求结构
 

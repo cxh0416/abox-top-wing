@@ -18,13 +18,19 @@
 - 内部运维：设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA，只供 OTA 平台使用。
 - 不支持：格口映射、试开通道、锁板、RS485 和旧桌面上位机协议。
 
-公共 MQTT 规则以平台仓库唯一维护的 [A-BOX 设备公共 MQTT 协议](https://github.com/cxh0416/abox-platform-firmware/blob/master/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md) 为准，飞翼命令和状态语义见 [A-BOX 飞翼设备业务协议](docs/protocols/A-BOX飞翼设备业务协议-V3.0.md)。`top-flying-wing-1.0.14` 只接受公共 V3 请求；内部 Topic、报文和 OTA 状态语义见 [顶飞翼 A-BOX 内部运维协议](docs/protocols/顶飞翼A-BOX内部运维协议-1.0.md)。
+公共 MQTT 规则以平台仓库唯一维护的 [A-BOX 设备公共 MQTT 协议](https://github.com/cxh0416/abox-platform-firmware/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md) 为准，飞翼命令和状态语义见 [A-BOX 飞翼设备业务协议](docs/protocols/A-BOX飞翼设备业务协议-V3.0.md)。`top-flying-wing-1.0.14` 只接受公共 V3 请求；内部 Topic、报文和 OTA 状态语义见 [顶飞翼 A-BOX 内部运维协议](docs/protocols/顶飞翼A-BOX内部运维协议-1.0.md)。
 
 ## CAN
 
 默认 CAN2，可通过 CMake 缓存变量 `TOP_WING_CAN_BUS=1|2` 切换。两路均配置为 500 kbps；业务使用 29 位扩展帧、发送 ID `0x1`、接收 ID `0x1`、DLC 8。当前量产控制器采用同 ID 请求/应答，厂家存档说明书中的应答 ID 自动加一规则已经过时；应用层仍会校验 DLC、命令字、状态字段和结果字段。
 
 `top-flying-wing-1.0.14` 使用 `remote_only_idle_silent` 会话模式：完全空闲时不轮询控制器；收到上升或下降请求后执行两次 `RD` 停止预检，中间保持 250 ms 静默，再读取 `RL` 限位并启动。远程运行期间才按 100 ms 周期读取反馈，普通位置样本按 200 ms、QoS 0上报；离散状态、故障和安全停止继续使用 QoS 1。到达目标端点、反馈超时、控制器故障、运行超时或检测到控制冲突时，以单次 `ST` 收口。改变方向前，平台仍必须先明确发送 `stop` 并等待停止确认。
+
+## 公共依赖与协议维护
+
+首次检出后，在仓库根目录执行 `git submodule update --init --recursive`，取得本产品已固定提交的 [A-BOX 公共平台](https://github.com/cxh0416/abox-platform-firmware)。该命令不会把平台升级到最新提交；构建使用 `platform/` 中的固定版本。
+
+公共固件组件、Boot 和公共 MQTT 规则在平台仓库维护；产品业务、硬件适配及产品协议在本仓库维护。[内部协议文档中心](https://github.com/cxh0416/protocol-docs) 只同步与发布已登记协议，协议原文仍在各源仓库修改。
 
 ## 构建与验证
 

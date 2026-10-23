@@ -10,7 +10,7 @@
 
 本文档只定义平台与飞翼设备之间稳定、可观察的公共业务接口，适用于所有使用该设备能力的项目。固件产品名、厂家 CAN、控制器轮询、预检步骤、内部状态机、超时配置和故障恢复算法不属于公共平台协议。
 
-通用报文、QoS、心跳、公共响应码和请求幂等遵循 [A-BOX 设备公共 MQTT 协议](https://github.com/cxh0416/abox-platform-firmware/blob/master/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md)。设备运维接口和内部实现不属于本文范围。
+通用报文、QoS、心跳、公共响应码和请求幂等遵循 [A-BOX 设备公共 MQTT 协议](https://github.com/cxh0416/abox-platform-firmware/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md)。设备运维接口和内部实现不属于本文范围。
 
 平台只需实现以下 4 个公共 Topic：
 

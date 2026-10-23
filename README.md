@@ -18,7 +18,7 @@
 - 内部运维：设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA，只供 OTA 平台使用。
 - 不支持：格口映射、试开通道、锁板、RS485 和旧桌面上位机协议。
 
-公共 MQTT 规则以平台仓库唯一维护的 [A-BOX 设备公共 MQTT 协议](https://github.com/cxh0416/abox-platform-firmware/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md) 为准，飞翼命令和状态语义见 [A-BOX 飞翼设备业务协议](docs/protocols/A-BOX飞翼设备业务协议-V3.0.md)。`top-flying-wing-1.0.14` 只接受公共 V3 请求；内部 Topic、报文和 OTA 状态语义见 [顶飞翼 A-BOX 内部运维协议](docs/protocols/顶飞翼A-BOX内部运维协议-1.0.md)。
+公共 MQTT 规则以平台仓库唯一维护的 [A-BOX 设备公共 MQTT 协议](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md) 为准，飞翼命令和状态语义见 [A-BOX 飞翼设备业务协议](docs/protocols/A-BOX飞翼设备业务协议-V3.0.md)。`top-flying-wing-1.0.14` 只接受公共 V3 请求；内部 Topic、报文和 OTA 状态语义见 [顶飞翼 A-BOX 内部运维协议](docs/protocols/顶飞翼A-BOX内部运维协议-1.0.md)。
 
 ## CAN
 
@@ -28,7 +28,7 @@
 
 ## 公共依赖与协议维护
 
-首次检出后，在仓库根目录执行 `git submodule update --init --recursive`，取得本产品已固定提交的 [A-BOX 公共平台](https://github.com/cxh0416/abox-platform-firmware)。该命令不会把平台升级到最新提交；构建使用 `platform/` 中的固定版本。
+首次检出后，在仓库根目录执行 `git submodule update --init --recursive`，取得本产品已固定提交的 [A-BOX 公共平台](https://github.com/cxh0416/abox-platform)。该命令不会把平台升级到最新提交；构建使用 `platform/` 中的固定版本。
 
 公共固件组件、Boot 和公共 MQTT 规则在平台仓库维护；产品业务、硬件适配及产品协议在本仓库维护。[内部协议文档中心](https://github.com/cxh0416/protocol-docs) 只同步与发布已登记协议，协议原文仍在各源仓库修改。
 

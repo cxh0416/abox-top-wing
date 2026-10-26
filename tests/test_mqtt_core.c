@@ -10,6 +10,7 @@ static uint8_t storage_busy;
 uint32_t HAL_GetTick(void) { return now; }
 void AppLog_Printf(AppLogLevel_t l,const char* t,const char* f,...) { (void)l;(void)t;(void)f; }
 void MQTT_V4_StoreOnModemReset(void) { ++resets; }
+void WingEnrollment_AfterModemReset(void) {}
 uint8_t MQTT_V4_StoreBusy(void) { return storage_busy; }
 static uint32_t tick(void* context) { (void)context;return now; }
 static int write_at(void* context,const uint8_t* data,uint16_t size,uint32_t timeout)

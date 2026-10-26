@@ -1,6 +1,6 @@
 # A-BOX 顶飞翼固件
 
-产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，当前构建基线为 `top-flying-wing-1.1.0`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
+产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，当前构建基线为 `top-flying-wing-1.1.3`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
 
 公共组件、完整 Boot 边界和其他产品迁移状态见 `platform/README.md`、`platform/docs/PLATFORM_CONTRACT.md`、`platform/docs/PRODUCT_MATRIX.md`。
 
@@ -24,6 +24,8 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 
 公共通信直接复用平台的 EC800 bridge、TLS runtime、V4 请求校验/有效期、报文编码、Cloud 启动调度、重连退避和内部授时组件。新升降请求统一使用平台的持久幂等引擎及 EC800 UFS 双副本日志，飞翼只提供业务回调、存储命名空间和共享工作区；旧 Flash 记录保留只读兼容保护。TLS 通过内部 `set_mqtt` 的 `tlsEnabled` 配置，沿用 CA 校验并探测实际模组 TLS 上下文能力；内部授时仅在 TLS 连接上进行。升降需要可信授时，未完成时返回 `4003`，显式 `stop` 不受授时影响。已有 Broker 配置不会因升级被自动改写。
 
+无有效持久配置的空板会使用公共入网服务和 STM32 身份适配，向专用 HTTPS 入网接口提交 `top_flying_wing_stm32f105_ec800_v1` 合同；不连接默认 MQTT 账号。审批后复用公共首次 MQTT 试连，连接、订阅及新心跳发布确认完成后才保存凭据并读回校验，失败则清理候选连接并继续等待入网。已有有效配置的设备直接沿用原配置。当前入网合同保持普通 MQTT 策略，可信内部授时仍要求后续 TLS 连接。
+
 内部 Topic、TLS 配置及 OTA 状态语义见 [顶飞翼 A-BOX 内部运维协议](docs/protocols/顶飞翼A-BOX内部运维协议-1.0.md)。
 
 ## CAN
@@ -46,7 +48,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\test_host.ps1
 python .\tools\test_boot_v2_contract.py
 ```
 
-上述脚本默认构建 `top-flying-wing-1.1.0`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。打包先生成完整临时制品，成功后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
+上述脚本默认构建 `top-flying-wing-1.1.3`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。打包先生成完整临时制品，成功后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
 
 App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。Full 只拼接到 App 实际末尾，不包含配置页和 Boot State。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
 

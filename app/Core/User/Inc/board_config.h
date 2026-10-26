@@ -15,6 +15,7 @@
 #define BOARD_CONFIG_DEFAULT_DIAG_LEVEL 2U
 
 void BoardConfig_Load(void);
+uint8_t BoardConfig_HasMqttCredentials(void);
 const BoardConfigStore_t* BoardConfig_Get(void);
 uint8_t BoardConfig_Save(const BoardConfigStore_t* cfg);
 void BoardConfig_ResetDefault(BoardConfigStore_t* cfg);

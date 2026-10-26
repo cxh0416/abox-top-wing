@@ -5,6 +5,7 @@
 #include "main.h"
 #include "mqtt_runtime.h"
 #include "mqtt_v4_store.h"
+#include "wing_enrollment.h"
 #include "time_base.h"
 #include <stdio.h>
 #include <string.h>
@@ -142,6 +143,7 @@ void MQTT_Core_Reset(void)
      * only invalidates the product-facing receipt and identity caches. */
     g_modem_ready = 1U;
     MQTT_V4_StoreOnModemReset();
+    WingEnrollment_AfterModemReset();
     ABoxMqttReceipt_Invalidate(&g_bridge.receipt);
     ABoxMqttEc800Bridge_SetSecurityReady(&g_bridge, 0U);
     ABoxEc800Iccid_OnModemReset(&g_bridge.iccid);
@@ -313,6 +315,11 @@ void MQTT_Core_CancelPendingPublish(void)
 }
 void MQTT_Core_RequestIccid(void)
 {
+    if (g_bridge.initialized && !g_bridge.transport.enabled && !ABoxEc800At_IsBusy(g_at))
+    {
+        (void)ABoxEc800Iccid_Request(&g_bridge.iccid, HAL_GetTick());
+        return;
+    }
     (void)ABoxMqttEc800Bridge_RequestIccid(&g_bridge, HAL_GetTick());
 }
 uint8_t MQTT_Core_IsIccidValid(void) { return g_bridge.iccid.valid; }

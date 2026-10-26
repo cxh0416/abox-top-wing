@@ -7,6 +7,7 @@
 
 static BoardConfigStore_t g_board_cfg;
 static BoardConfigStore_t g_board_cfg_work;
+static uint8_t g_have_saved_config;
 
 static void copy_text(char* dst, uint16_t size, const char* src)
 {
@@ -60,6 +61,7 @@ static uint8_t valid(const BoardConfigStore_t* cfg)
 void BoardConfig_Load(void)
 {
     OTA_Info_LoadBoardConfig(&g_board_cfg_work);
+    g_have_saved_config = valid(&g_board_cfg_work);
     if (valid(&g_board_cfg_work))
     {
         g_board_cfg = g_board_cfg_work;
@@ -73,6 +75,7 @@ void BoardConfig_Load(void)
 }
 
 const BoardConfigStore_t* BoardConfig_Get(void) { return &g_board_cfg; }
+uint8_t BoardConfig_HasMqttCredentials(void) { return g_have_saved_config; }
 
 uint8_t BoardConfig_Save(const BoardConfigStore_t* cfg)
 {
@@ -87,7 +90,10 @@ uint8_t BoardConfig_Save(const BoardConfigStore_t* cfg)
         copy_text(g_board_cfg_work.diag_log_host, sizeof(g_board_cfg_work.diag_log_host), BOARD_CONFIG_DEFAULT_DIAG_HOST);
     g_board_cfg_work.checksum = checksum(&g_board_cfg_work);
     if (!OTA_Info_SaveBoardConfig(&g_board_cfg_work)) return 0U;
+    BoardConfigStore_t readback;
+    if (!OTA_Info_LoadBoardConfig(&readback) || memcmp(&readback, &g_board_cfg_work, sizeof(readback))) return 0U;
     g_board_cfg = g_board_cfg_work;
+    g_have_saved_config = 1U;
     APP_LOGI("CFG", "saved");
     return 1U;
 }

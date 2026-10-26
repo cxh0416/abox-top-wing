@@ -79,7 +79,8 @@ uint8_t MqttRuntime_Init(void)
         options.ca_ciphersuite = 0xC02BU;
         port.ca_ready = ca_ready; port.time_valid = time_valid;
         port.observe_modem_line = observe; port.state_changed = changed;
-        initialized = ABoxMqttRuntime_Init(&g_runtime, MQTT_Core_AtCore(), &port, &options, &c, now);
+        initialized = ABoxMqttRuntime_Init(&g_runtime, MQTT_Core_AtCore(), &port, &options,
+            BoardConfig_HasMqttCredentials() ? &c : NULL, now);
         if (!initialized) APP_LOGE("MQTT", "runtime init failed");
     }
     return initialized;
@@ -104,12 +105,16 @@ void MqttRuntime_Task(void)
         c.password = pending_password; c.tls_enabled = pending_tls;
         if (ABoxMqttRuntime_Apply(&g_runtime, &c, now)) endpoint_pending = 0U;
     }
-    if (resume_after_ota && !endpoint_pending && !OtaService_IsBusy() &&
+    if (resume_after_ota && BoardConfig_HasMqttCredentials() && !endpoint_pending && !OtaService_IsBusy() &&
         ABoxMqttRuntime_GetState(&g_runtime) == ABOX_MQTT_RUNTIME_UNENROLLED)
     {
         if (MqttRuntime_ApplyCurrentConfig()) resume_after_ota = 0U;
     }
     ABoxMqttRuntime_Poll(&g_runtime, now);
+    /* Runtime owns connection preparation; the connected transport still
+     * needs polling for publish timeouts, RX framing and reconnect backoff. */
+    if (ABoxMqttRuntime_GetState(&g_runtime) == ABOX_MQTT_RUNTIME_READY)
+        MQTT_Core_TransportTask();
 }
 
 void MQTT_Core_Task(void) { MqttRuntime_Task(); }
@@ -123,6 +128,16 @@ uint8_t MqttRuntime_IsTlsActive(void)
 { return initialized && ABoxMqttRuntime_IsReady(&g_runtime) && ABoxMqttRuntime_IsTlsActive(&g_runtime); }
 uint8_t MqttRuntime_NeedsModemRecovery(void)
 { return initialized && ABoxMqttRuntime_NeedsModemRecovery(&g_runtime); }
+
+int MqttRuntime_ClearEnrollmentCandidate(void)
+{
+    if (!initialized) return -1;
+    int stopped = ABoxMqttRuntime_StopFirst(&g_runtime, HAL_GetTick());
+    if (stopped != 1) return stopped;
+    endpoint_pending = resume_after_ota = initialized = 0U;
+    MQTT_Core_ClearBroker();
+    return MqttRuntime_Init() ? 1 : -1;
+}
 
 #ifdef TOP_WING_HOST_TEST
 const ABoxMqttRuntime* MqttRuntime_TestState(void) { return &g_runtime; }

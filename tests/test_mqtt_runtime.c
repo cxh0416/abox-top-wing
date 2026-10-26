@@ -15,6 +15,7 @@ static BoardConfigStore_t saved;
 uint32_t HAL_GetTick(void) { return tick; }
 void AppLog_Printf(int level,const char* tag,const char* format,...) { (void)level;(void)tag;(void)format; }
 const BoardConfigStore_t* BoardConfig_Get(void) { return &saved; }
+uint8_t BoardConfig_HasMqttCredentials(void) { return 1U; }
 uint8_t OtaService_IsProvisioned(void) { return 1U; }
 uint8_t OtaService_IsBusy(void) { return ota_busy; }
 uint8_t TimeBase_IsValid(void) { return 1U; }
@@ -26,6 +27,7 @@ void MQTT_Core_SetSecurityReady(uint8_t value) { (void)value; }
 uint8_t MQTT_Core_ApplyRuntimeConfig(const ABoxMqttConfig* config) { (void)config;return 1U; }
 void MQTT_Core_TransportTask(void) {}
 void MQTT_Core_Reset(void) {}
+void MQTT_Core_ClearBroker(void) {}
 int MQTT_Core_Stop(uint32_t now) { (void)now;return 1; }
 uint8_t MQTT_Core_IsReady(void) { return 1U; }
 uint8_t MQTT_Core_IsConnected(void) { return 1U; }

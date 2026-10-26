@@ -2,6 +2,7 @@
 #define MQTT_RUNTIME_H
 #include "abox_mqtt_runtime.h"
 uint8_t MqttRuntime_Init(void);
+int MqttRuntime_ClearEnrollmentCandidate(void);
 void MqttRuntime_Task(void);
 int MqttRuntime_StopFirst(uint32_t now);
 uint8_t MqttRuntime_IsTlsActive(void);

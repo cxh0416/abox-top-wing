@@ -44,6 +44,7 @@
 #include "ota_service.h"
 #include "time_base.h"
 #include "mqtt_runtime.h"
+#include "wing_enrollment.h"
 #include "abox_stm32_monotonic.h"
 #include "abox_ec800_recovery.h"
 #include "wing_controller.h"
@@ -232,7 +233,8 @@ int main(void)
     MQTT_Core_Init(&g_mqtt_cfg, MQTT_App_OnMessage);
     OtaService_Init(&g_ec800_at);
 
-    MQTT_App_Init(BoardConfig_Get()->vid);
+    if (!WingEnrollment_Init(&g_ec800_at)) APP_LOGE("ENROLL", "initialization failed");
+    MQTT_App_Init(WingEnrollment_DeviceId());
     MQTT_Core_SetTopics(MQTT_App_GetSubTopics(), MQTT_App_GetSubTopicCount(), MQTT_App_GetHeartbeatTopic());
     if (!MqttRuntime_Init()) APP_LOGE("MQTT", "runtime not initialized");
 
@@ -270,6 +272,7 @@ int main(void)
             }
             OtaService_Task();
             MQTT_Core_Task();
+            WingEnrollment_Task();
             MQTT_App_Task();
             if (ABoxEc800Recovery_Poll(&g_modem_recovery, now,
                 g_ec800_at.quarantined || MqttRuntime_NeedsModemRecovery(),

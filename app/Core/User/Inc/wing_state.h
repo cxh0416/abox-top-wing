@@ -77,7 +77,7 @@ typedef struct
     uint8_t status_fresh;
     uint32_t feedback_age_ms;
     uint8_t have_feedback;
-    char last_request_id[40];
+    char last_request_id[65];
     uint32_t run_elapsed_ms;
     WingSafetyReason safety_reason;
     WingCanSession can_session;

@@ -2,11 +2,11 @@
 
 #include <string.h>
 
-static void copy_request_id(char dst[40], const char* src)
+static void copy_request_id(char dst[65], const char* src)
 {
     if (!src) return;
-    strncpy(dst, src, 39U);
-    dst[39] = '\0';
+    strncpy(dst, src, 64U);
+    dst[64] = '\0';
 }
 
 static uint32_t elapsed_ms(uint32_t now, uint32_t since)

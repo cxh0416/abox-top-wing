@@ -15,14 +15,13 @@
 #include "ota_service.h"
 #include "time_base.h"
 #include "wing_controller.h"
+#include "mqtt_v4.h"
+#include "mqtt_v4_store.h"
+#include "mqtt_runtime.h"
+#include "abox_cloud_queue.h"
 
 #define PRODUCT_ID "top_flying_wing"
-#define PUBLIC_DEVICE_TYPE "wing_actuator"
 #define RESPONSE_QUEUE_DEPTH 2U
-#define RESPONSE_CACHE_DEPTH 4U
-#define RESPONSE_CACHE_TTL_MS 600000U
-#define RESPONSE_CACHE_SIZE 768U
-
 typedef enum { RESP_CTRL = 0, RESP_INTERNAL_CONFIG, RESP_INTERNAL_OTA } ResponseTopic;
 typedef enum { OTA_REQ_IDLE = 0, OTA_REQ_DOWNLOADING, OTA_REQ_WAIT_MQTT } OtaRequestState;
 typedef struct
@@ -30,34 +29,23 @@ typedef struct
     uint8_t valid;
     ResponseTopic topic;
     uint16_t code;
-    char request_id[40];
+    char request_id[65];
     char payload[MQTT_APP_JSON_BUF_SZ];
 } ResponseItem;
-typedef struct
-{
-    uint8_t valid;
-    uint8_t inflight;
-    uint32_t tick;
-    uint32_t digest;
-    uint16_t code;
-    char request_id[40];
-    char response[RESPONSE_CACHE_SIZE];
-} RequestCache;
-
 static ResponseItem g_queue[RESPONSE_QUEUE_DEPTH];
-static uint8_t g_queue_head, g_queue_count;
-static RequestCache g_cache[RESPONSE_CACHE_DEPTH];
+static const ABoxCloudQueueStorage queue_storage = {g_queue, sizeof(g_queue[0]), RESPONSE_QUEUE_DEPTH};
+static ABoxCloudQueueCursor queue_cursor;
 static OtaRequestState g_ota_request_state;
 static uint16_t g_ota_response_code;
 static uint32_t g_ota_response_error;
 static uint32_t g_ota_response_wait_tick;
-static char g_ota_request_id[40];
+static char g_ota_request_id[65];
 
-static void copy_id(char dst[40], const char* src)
+static void copy_id(char dst[65], const char* src)
 {
     if (!src) { dst[0] = '\0'; return; }
-    strncpy(dst, src, 39U);
-    dst[39] = '\0';
+    strncpy(dst, src, 64U);
+    dst[64] = '\0';
 }
 
 static const char* response_topic(ResponseTopic topic)
@@ -83,8 +71,7 @@ void MQTT_App_ResetResponseState(void)
     g_mqtt_app_resp_topic[0] = '\0';
     g_mqtt_app_resp_request_id[0] = '\0';
     g_mqtt_app_resp_code = 0U;
-    memset(g_queue, 0, sizeof(g_queue));
-    g_queue_head = g_queue_count = 0U;
+    ABoxCloudQueue_Reset(&queue_storage, &queue_cursor);
     g_ota_request_state = OTA_REQ_IDLE;
     g_ota_response_code = 0U;
     g_ota_response_error = 0U;
@@ -95,17 +82,16 @@ void MQTT_App_ResetResponseState(void)
 void MQTT_App_PromoteQueuedResponse(void)
 {
     ResponseItem* item;
-    if (g_mqtt_app_resp_pending || !g_queue_count) return;
-    item = &g_queue[g_queue_head];
+    if (g_mqtt_app_resp_pending) return;
+    item = ABoxCloudQueue_Front(&queue_storage, &queue_cursor);
+    if (!item) return;
     strncpy(g_mqtt_app_resp_topic, response_topic(item->topic), sizeof(g_mqtt_app_resp_topic) - 1U);
     strncpy(g_mqtt_app_resp_payload, item->payload, sizeof(g_mqtt_app_resp_payload) - 1U);
     g_mqtt_app_resp_topic[sizeof(g_mqtt_app_resp_topic) - 1U] = '\0';
     g_mqtt_app_resp_payload[sizeof(g_mqtt_app_resp_payload) - 1U] = '\0';
     copy_id(g_mqtt_app_resp_request_id, item->request_id);
     g_mqtt_app_resp_code = item->code;
-    memset(item, 0, sizeof(*item));
-    g_queue_head = (uint8_t)((g_queue_head + 1U) % RESPONSE_QUEUE_DEPTH);
-    g_queue_count--;
+    (void)ABoxCloudQueue_Pop(&queue_storage, &queue_cursor);
     g_mqtt_app_resp_pending = 1U;
     g_mqtt_app_resp_tick = HAL_GetTick();
 }
@@ -124,7 +110,6 @@ uint8_t MQTT_App_DropStalePendingResponse(uint32_t now, uint32_t stale_ms)
 static uint8_t queue_payload(ResponseTopic topic, const char* payload, const char* request_id, uint16_t code)
 {
     ResponseItem* item;
-    uint8_t tail;
     if (!payload || strlen(payload) >= MQTT_APP_JSON_BUF_SZ) return 0U;
     if (!g_mqtt_app_resp_pending)
     {
@@ -138,132 +123,15 @@ static uint8_t queue_payload(ResponseTopic topic, const char* payload, const cha
         g_mqtt_app_resp_tick = HAL_GetTick();
         return 1U;
     }
-    if (g_queue_count >= RESPONSE_QUEUE_DEPTH) return 0U;
-    tail = (uint8_t)((g_queue_head + g_queue_count) % RESPONSE_QUEUE_DEPTH);
-    item = &g_queue[tail];
+    item = ABoxCloudQueue_Reserve(&queue_storage, &queue_cursor);
+    if (!item) return 0U;
     item->valid = 1U;
     item->topic = topic;
     item->code = code;
     copy_id(item->request_id, request_id);
     strncpy(item->payload, payload, sizeof(item->payload) - 1U);
     item->payload[sizeof(item->payload) - 1U] = '\0';
-    g_queue_count++;
-    return 1U;
-}
-
-static int cache_find(const char* request_id, uint32_t now)
-{
-    int i;
-    for (i = 0; i < (int)RESPONSE_CACHE_DEPTH; ++i)
-    {
-        if (g_cache[i].valid && !g_cache[i].inflight && (now - g_cache[i].tick) > RESPONSE_CACHE_TTL_MS)
-            memset(&g_cache[i], 0, sizeof(g_cache[i]));
-        if (g_cache[i].valid && strcmp(g_cache[i].request_id, request_id) == 0) return i;
-    }
-    return -1;
-}
-
-static uint32_t digest_action(const char* command, const char* action)
-{
-    uint32_t hash = 2166136261U;
-    const char* values[3] = { PRODUCT_ID, command, action };
-    int i;
-    for (i = 0; i < 3; ++i)
-    {
-        const unsigned char* p = (const unsigned char*)values[i];
-        while (*p) { hash ^= *p++; hash *= 16777619U; }
-        hash ^= 0xFFU; hash *= 16777619U;
-    }
-    return hash;
-}
-
-/* Returns: 0=new, 1=inflight duplicate, 2=cached duplicate, 3=conflict. */
-static uint8_t cache_begin(const char* request_id, uint32_t digest, int* slot)
-{
-    uint32_t now = HAL_GetTick();
-    uint32_t oldest_age = 0U;
-    int i, selected = -1;
-    *slot = cache_find(request_id, now);
-    if (*slot >= 0)
-    {
-        if (g_cache[*slot].digest != digest) return 3U;
-        return g_cache[*slot].inflight ? 1U : 2U;
-    }
-    for (i = 0; i < (int)RESPONSE_CACHE_DEPTH; ++i)
-    {
-        uint32_t age;
-        if (!g_cache[i].valid) { selected = i; break; }
-        if (g_cache[i].inflight) continue;
-        age = now - g_cache[i].tick;
-        if (selected < 0 || age > oldest_age) { selected = i; oldest_age = age; }
-    }
-    if (selected < 0) selected = 0;
-    memset(&g_cache[selected], 0, sizeof(g_cache[selected]));
-    g_cache[selected].valid = 1U;
-    g_cache[selected].inflight = 1U;
-    g_cache[selected].tick = now;
-    g_cache[selected].digest = digest;
-    strncpy(g_cache[selected].request_id, request_id, sizeof(g_cache[selected].request_id) - 1U);
-    *slot = selected;
-    return 0U;
-}
-
-static void cache_complete(const char* request_id, const char* response, uint16_t code)
-{
-    int slot = cache_find(request_id, HAL_GetTick());
-    if (slot < 0 || !response) return;
-    g_cache[slot].inflight = 0U;
-    g_cache[slot].tick = HAL_GetTick();
-    g_cache[slot].code = code;
-    strncpy(g_cache[slot].response, response, sizeof(g_cache[slot].response) - 1U);
-    g_cache[slot].response[sizeof(g_cache[slot].response) - 1U] = '\0';
-}
-
-static void add_nullable_string(cJSON* object, const char* name, const char* value)
-{
-    if (value && value[0]) cJSON_AddStringToObject(object, name, value);
-    else cJSON_AddNullToObject(object, name);
-}
-
-void MQTT_App_AddWingSnapshot(cJSON* object)
-{
-    const WingSnapshot* s = WingController_GetSnapshot();
-    char fault[5];
-    if (!object || !s) return;
-    cJSON_AddStringToObject(object, "motionState", WingMotionState_Name(s->motion_state));
-    add_nullable_string(object, "activeAction", WingAction_Name(s->active_action));
-    if (s->have_position) cJSON_AddNumberToObject(object, "positionMm", s->position_mm);
-    else cJSON_AddNullToObject(object, "positionMm");
-    if (s->have_limits)
-    {
-        cJSON_AddNumberToObject(object, "topLimitMm", s->top_limit_mm);
-        cJSON_AddNumberToObject(object, "bottomLimitMm", s->bottom_limit_mm);
-    }
-    else
-    {
-        cJSON_AddNullToObject(object, "topLimitMm");
-        cJSON_AddNullToObject(object, "bottomLimitMm");
-    }
-    add_nullable_string(object, "atEndpoint", WingEndpoint_Name(s->at_endpoint));
-    if (s->fault_code)
-    {
-        snprintf(fault, sizeof(fault), "E%02u", (unsigned)s->fault_code);
-        cJSON_AddStringToObject(object, "faultCode", fault);
-    }
-    else cJSON_AddNullToObject(object, "faultCode");
-    if (s->controller_online_known)
-        cJSON_AddBoolToObject(object, "controllerOnline", s->controller_online ? 1 : 0);
-    else cJSON_AddNullToObject(object, "controllerOnline");
-    cJSON_AddBoolToObject(object, "statusFresh", s->status_fresh ? 1 : 0);
-    cJSON_AddStringToObject(object, "canSession", WingCanSession_Name(s->can_session));
-    cJSON_AddStringToObject(object, "controlOwner", WingControlOwner_Name(s->control_owner));
-    cJSON_AddStringToObject(object, "operationPhase", WingOperationPhase_Name(s->operation_phase));
-    if (s->status_fresh && s->have_feedback)
-        cJSON_AddNumberToObject(object, "feedbackAgeMs", s->feedback_age_ms);
-    else cJSON_AddNullToObject(object, "feedbackAgeMs");
-    add_nullable_string(object, "lastRequestId", s->last_request_id);
-    cJSON_AddNumberToObject(object, "runElapsedMs", s->run_elapsed_ms);
-    add_nullable_string(object, "safetyStopReason", WingSafetyReason_Name(s->safety_reason));
+    return ABoxCloudQueue_Commit(&queue_storage, &queue_cursor);
 }
 
 static const char* message_for_code(uint16_t code)
@@ -289,35 +157,23 @@ static void build_response(ResponseTopic topic, const char* request_id, uint16_t
     cJSON* root = cJSON_CreateObject();
     cJSON* data = cJSON_CreateObject();
     if (!root || !data || !TimeBase_FormatUtcMs(timestamp, sizeof(timestamp))) goto done;
-    uint8_t public_response = topic == RESP_CTRL ? 1U : 0U;
     (void)action;
     (void)include_wing;
-    cJSON_AddStringToObject(root, "version", public_response ? MQTT_APP_PUBLIC_VERSION_STR : MQTT_APP_INTERNAL_VERSION_STR);
+    cJSON_AddStringToObject(root, "version", MQTT_APP_INTERNAL_VERSION_STR);
     cJSON_AddRawToObject(root, "timestamp", timestamp);
-    cJSON_AddStringToObject(data, public_response ? "deviceType" : "product",
-                            public_response ? PUBLIC_DEVICE_TYPE : PRODUCT_ID);
+    cJSON_AddStringToObject(data, "product", PRODUCT_ID);
     cJSON_AddStringToObject(data, "requestId", request_id ? request_id : "");
     cJSON_AddNumberToObject(data, "code", code);
     cJSON_AddStringToObject(data, "msg", message_for_code(code));
-    if (public_response)
-    {
-        if (result) { cJSON_Delete(result); result = 0; }
-    }
-    else if (result) { cJSON_AddItemToObject(data, "result", result); result = 0; }
+    if (result) { cJSON_AddItemToObject(data, "result", result); result = 0; }
     else cJSON_AddNullToObject(data, "result");
     cJSON_AddItemToObject(root, "data", data); data = 0;
-    if (!cJSON_PrintPreallocated(root, output, sizeof(output), 0))
+    if (!cJSON_PrintPreallocated(root, output, sizeof(output), 0) || strlen(output) > 1024U)
     {
-        if (public_response)
-            snprintf(output, sizeof(output),
-                     "{\"version\":\"3.0\",\"timestamp\":0,\"data\":{\"deviceType\":\"%s\",\"requestId\":\"%s\",\"code\":500,\"msg\":\"response too large\"}}",
-                     PUBLIC_DEVICE_TYPE, request_id ? request_id : "");
-        else
             snprintf(output, sizeof(output),
                      "{\"version\":\"2.0\",\"timestamp\":0,\"data\":{\"product\":\"%s\",\"requestId\":\"%s\",\"code\":500,\"msg\":\"response too large\",\"result\":null}}",
                      PRODUCT_ID, request_id ? request_id : "");
     }
-    if (topic == RESP_CTRL) cache_complete(request_id, output, code);
     if (!queue_payload(topic, output, request_id, code))
         APP_LOGE("RESP", "queue full rid=%s code=%u", request_id ? request_id : "", (unsigned)code);
     else
@@ -367,6 +223,9 @@ static cJSON* device_info(void)
     cJSON_AddBoolToObject(obj, "otaBusy", OtaService_IsBusy() ? 1 : 0);
     cJSON_AddStringToObject(obj, "mqttHost", cfg->mqtt_host);
     cJSON_AddNumberToObject(obj, "mqttPort", cfg->mqtt_port);
+    cJSON_AddBoolToObject(obj, "tlsEnabled", (cfg->flags & BOARD_CONFIG_FLAG_MQTT_TLS) != 0U);
+    cJSON_AddBoolToObject(obj, "tlsActive", MqttRuntime_IsTlsActive());
+    cJSON_AddBoolToObject(obj, "trustedTime", TimeBase_IsTrusted());
     cJSON_AddNumberToObject(obj, "canBus", TOP_WING_CAN_BUS);
     cJSON_AddNumberToObject(obj, "canBitrate", 500000U);
     cJSON_AddNumberToObject(obj, "feedbackTimeoutMs", WING_ACTIVE_FEEDBACK_TIMEOUT_MS);
@@ -417,9 +276,15 @@ static void handle_internal_config(const char* request_id, cJSON* params)
         cJSON* port = cJSON_GetObjectItem(params, "port");
         cJSON* user = cJSON_GetObjectItem(params, "username");
         cJSON* pass = cJSON_GetObjectItem(params, "password");
-        uint8_t ok = MQTT_App_ScheduleMqttConfigTrial(cJSON_IsString(vid) ? vid->valuestring : 0,
+        cJSON* tls = cJSON_GetObjectItem(params, "tlsEnabled");
+        uint8_t tls_enabled = (BoardConfig_Get()->flags & BOARD_CONFIG_FLAG_MQTT_TLS) != 0U;
+        if (tls && !cJSON_IsBool(tls)) { build_response(RESP_INTERNAL_CONFIG, request_id, 4001U, WING_ACTION_NONE, 0U, 0); return; }
+        if (!MQTT_V4_StoreCanErase() || WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT)
+        { build_response(RESP_INTERNAL_CONFIG, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
+        if (tls) tls_enabled = cJSON_IsTrue(tls);
+        uint8_t ok = MQTT_App_ScheduleMqttConfigTrial(request_id, cJSON_IsString(vid) ? vid->valuestring : 0,
             cJSON_IsString(host) ? host->valuestring : 0, cJSON_IsNumber(port) ? (uint16_t)port->valuedouble : 0U,
-            cJSON_IsString(user) ? user->valuestring : 0, cJSON_IsString(pass) ? pass->valuestring : 0);
+            cJSON_IsString(user) ? user->valuestring : 0, cJSON_IsString(pass) ? pass->valuestring : 0, tls_enabled);
         build_response(RESP_INTERNAL_CONFIG, request_id, ok ? 202U : 500U, WING_ACTION_NONE, 0U, 0);
         return;
     }
@@ -526,7 +391,7 @@ void MQTT_App_HandleWingResultTask(void)
 {
     WingControlResult result;
     while (WingController_TakeResult(&result))
-        build_response(RESP_CTRL, result.request_id, result.code, result.action, 1U, 0);
+        MQTT_V4_HandleResult(&result);
 }
 
 void MQTT_App_HandleCommandMessage(const char* topic, const char* payload)
@@ -536,6 +401,7 @@ void MQTT_App_HandleCommandMessage(const char* topic, const char* payload)
     uint8_t public_request;
     if (!topic || !payload || g_mqtt_app_ota_reset_pending) return;
     public_request = strcmp(topic, g_mqtt_app_ctrl_topic) == 0 ? 1U : 0U;
+    if (public_request) { MQTT_V4_HandleRequest(payload); return; }
     if (!public_request && strcmp(topic, g_mqtt_app_internal_config_topic) != 0 &&
         strcmp(topic, g_mqtt_app_internal_ota_topic) != 0)
     {
@@ -571,39 +437,7 @@ void MQTT_App_HandleCommandMessage(const char* topic, const char* payload)
         APP_LOGW("CMD", "reject rid=%s reason=envelope", request_text);
         build_response(public_request ? RESP_CTRL : RESP_INTERNAL_CONFIG, request_text, 4001U, WING_ACTION_NONE, public_request, 0); goto done;
     }
-    if (public_request)
-    {
-        cJSON* device_type = cJSON_GetObjectItem(data, "deviceType");
-        cJSON* action_node = cJSON_GetObjectItem(params, "action");
-        WingAction action = WING_ACTION_NONE;
-        int slot;
-        uint8_t duplicate;
-        uint16_t code;
-        if (!cJSON_IsString(device_type) || strcmp(device_type->valuestring, PUBLIC_DEVICE_TYPE) != 0)
-        { APP_LOGW("CMD", "reject rid=%s reason=deviceType", request_text); build_response(RESP_CTRL, request_text, 4004U, WING_ACTION_NONE, 1U, 0); goto done; }
-        if (strcmp(command->valuestring, "wing_control") != 0)
-        { APP_LOGW("CMD", "reject rid=%s reason=command", request_text); build_response(RESP_CTRL, request_text, 4002U, WING_ACTION_NONE, 1U, 0); goto done; }
-        if (cJSON_IsString(action_node))
-        {
-            if (strcmp(action_node->valuestring, "ascend") == 0) action = WING_ACTION_ASCEND;
-            else if (strcmp(action_node->valuestring, "descend") == 0) action = WING_ACTION_DESCEND;
-            else if (strcmp(action_node->valuestring, "stop") == 0) action = WING_ACTION_STOP;
-        }
-        if (action == WING_ACTION_NONE) { APP_LOGW("CMD", "reject rid=%s reason=action", request_text); build_response(RESP_CTRL, request_text, 4001U, action, 1U, 0); goto done; }
-        APP_LOGI("CMD", "rx rid=%s action=%s", request_text, WingAction_Name(action));
-        duplicate = cache_begin(request_text, digest_action(command->valuestring, action_node->valuestring), &slot);
-        if (duplicate == 1U) { APP_LOGI("CMD", "inflight duplicate rid=%s", request_text); goto done; }
-        if (duplicate == 2U)
-        {
-            APP_LOGI("CMD", "cached rid=%s", request_text);
-            (void)queue_payload(RESP_CTRL, g_cache[slot].response, request_text, g_cache[slot].code);
-            goto done;
-        }
-        if (duplicate == 3U) { APP_LOGW("CMD", "conflict rid=%s", request_text); build_response(RESP_CTRL, request_text, 4001U, action, 1U, 0); goto done; }
-        code = WingController_Request(action, request_text);
-        if (code) build_response(RESP_CTRL, request_text, code, action, 1U, 0);
-    }
-    else if (strcmp(topic, g_mqtt_app_internal_config_topic) == 0 && strcmp(command->valuestring, "internal_config") == 0)
+    if (strcmp(topic, g_mqtt_app_internal_config_topic) == 0 && strcmp(command->valuestring, "internal_config") == 0)
     {
         cJSON* action_node = cJSON_GetObjectItem(params, "action");
         APP_LOGI("CMD", "rx rid=%s action=%s", request_text,
@@ -624,3 +458,6 @@ void MQTT_App_HandleCommandMessage(const char* topic, const char* payload)
 done:
     cJSON_Delete(root);
 }
+
+uint8_t MQTT_App_QueuePublicResponse(const char* payload, const char* id, uint16_t code)
+{ return queue_payload(RESP_CTRL, payload, id, code); }

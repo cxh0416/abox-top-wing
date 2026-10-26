@@ -1,25 +1,27 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Release')] [string] $Configuration = 'Release',
-    [string] $FirmwareVersion = 'top-flying-wing-1.0.14'
+    [string] $FirmwareVersion = 'top-flying-wing-1.1.0'
 )
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $appSource = Join-Path $root 'app'
-$appBuild = Join-Path $appSource ("build/ABoxApp{0}" -f $Configuration)
+$appBuild = Join-Path $root 'build/app'
 $toolchain = Join-Path $appSource 'cmake/gcc-arm-none-eabi.cmake'
 $bootLinker = Join-Path $root 'platform/targets/stm32f105_abox_boot/STM32F105xx_FLASH.ld'
 $appLinker = Join-Path $appSource 'STM32F105XX_FLASH.ld'
 $bootArtifact = Join-Path $root 'platform/targets/stm32f105_abox_boot/dist/ABox_Boot.bin'
-$validator = Join-Path $root 'platform/tools/validate_flash_layout.ps1'
+$validator = Join-Path $PSScriptRoot 'test_boot_v2_contract.py'
 
 foreach ($required in @($toolchain, $bootLinker, $appLinker, $bootArtifact, $validator)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing release input: $required" }
 }
 
-& $validator -BootLinker $bootLinker -AppLinker $appLinker | Out-Host
-if (-not $?) { throw 'Flash layout validation failed' }
+# Top Flying Wing retains App through 0x0803E7FF and has no extra recovery
+# page at 0x0803E000. Validate its frozen contract rather than another layout.
+& python $validator | Out-Host
+if ($LASTEXITCODE -ne 0) { throw 'Frozen Flash layout validation failed' }
 
 & cmake -S $appSource -B $appBuild -G Ninja `
     "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `

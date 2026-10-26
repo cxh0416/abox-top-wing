@@ -19,7 +19,7 @@ const BoardConfigStore_t* BoardConfig_Get(void);
 uint8_t BoardConfig_Save(const BoardConfigStore_t* cfg);
 void BoardConfig_ResetDefault(BoardConfigStore_t* cfg);
 uint8_t BoardConfig_SetMqtt(const char* vid, const char* host, uint16_t port,
-                            const char* username, const char* password);
+                            const char* username, const char* password, uint8_t tls_enabled);
 uint8_t BoardConfig_SetDiagLog(uint8_t enabled, const char* host, uint16_t port, uint8_t level);
 uint8_t BoardConfig_SetDiagBootOnce(uint8_t enabled);
 

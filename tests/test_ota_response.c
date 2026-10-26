@@ -44,7 +44,7 @@ uint32_t g_mqtt_app_resp_pub_ok_seq;
 uint32_t g_mqtt_app_resp_tick;
 char g_mqtt_app_resp_topic[128];
 char g_mqtt_app_resp_payload[MQTT_APP_JSON_BUF_SZ];
-char g_mqtt_app_resp_request_id[40];
+char g_mqtt_app_resp_request_id[65];
 uint16_t g_mqtt_app_resp_code;
 volatile uint8_t g_mqtt_app_ota_reset_pending;
 uint32_t g_mqtt_app_ota_reset_tick;
@@ -101,10 +101,10 @@ int ABoxBootV2_DescriptorValid(const ABoxBootV2Descriptor* descriptor) { (void)d
 const char* ABoxBootV2App_StableSeedSource(void) { return "none"; }
 const char* TopFlyingWing_AppFwVersion(void) { return "top-flying-wing-1.0.9"; }
 const char* OtaService_Phase(void) { return "IDLE"; }
-uint8_t MQTT_App_ScheduleMqttConfigTrial(const char* vid, const char* host, uint16_t port,
-                                         const char* username, const char* password)
+uint8_t MQTT_App_ScheduleMqttConfigTrial(const char* request_id, const char* vid, const char* host, uint16_t port,
+                                         const char* username, const char* password, uint8_t tls_enabled)
 {
-    (void)vid; (void)host; (void)port; (void)username; (void)password;
+    (void)request_id; (void)tls_enabled; (void)vid; (void)host; (void)port; (void)username; (void)password;
     return 0U;
 }
 const WingSnapshot* WingController_GetSnapshot(void)
@@ -124,6 +124,11 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
     (void)action; (void)request_id; return wing_request_code;
 }
 uint8_t WingController_TakeResult(WingControlResult* result) { (void)result; return 0U; }
+uint8_t MqttRuntime_IsTlsActive(void) { return 0U; }
+uint8_t TimeBase_IsTrusted(void) { return 0U; }
+uint8_t MQTT_V4_StoreCanErase(void) { return 1U; }
+void MQTT_V4_HandleResult(const WingControlResult* result) { (void)result; }
+void MQTT_V4_HandleRequest(const char* text) { (void)text; }
 
 static cJSON* ota_params(void)
 {
@@ -152,45 +157,9 @@ static int response_code(void)
     return value;
 }
 
-static void assert_public_response(const char* version, const char* device_type,
-                                   int code, uint8_t has_result)
-{
-    cJSON* root = cJSON_Parse(g_mqtt_app_resp_payload);
-    cJSON* data;
-    assert(root);
-    data = cJSON_GetObjectItem(root, "data");
-    assert(cJSON_IsObject(data));
-    assert(cJSON_IsString(cJSON_GetObjectItem(root, "version")));
-    assert(strcmp(cJSON_GetObjectItem(root, "version")->valuestring, version) == 0);
-    assert(cJSON_IsString(cJSON_GetObjectItem(data, "deviceType")));
-    assert(strcmp(cJSON_GetObjectItem(data, "deviceType")->valuestring, device_type) == 0);
-    assert(cJSON_GetObjectItem(data, "product") == 0);
-    assert((cJSON_GetObjectItem(data, "result") != 0) == has_result);
-    assert(cJSON_GetObjectItem(data, "code")->valueint == code);
-    cJSON_Delete(root);
-}
-
 int main(void)
 {
     cJSON* params;
-
-    strcpy(g_mqtt_app_ctrl_topic, "/zxwl/abox/W1/ctrl");
-    wing_request_code = 200U;
-    MQTT_App_ResetResponseState();
-    MQTT_App_HandleCommandMessage(g_mqtt_app_ctrl_topic,
-        "{\"version\":\"3.0\",\"timestamp\":1,\"data\":{\"deviceType\":\"wing_actuator\",\"requestId\":\"wing-ok\",\"command\":\"wing_control\",\"params\":{\"action\":\"ascend\"}}}");
-    assert(g_mqtt_app_resp_pending);
-    assert_public_response("3.0", "wing_actuator", 200, 0U);
-
-    MQTT_App_ResetResponseState();
-    MQTT_App_HandleCommandMessage(g_mqtt_app_ctrl_topic,
-        "{\"version\":\"2.0\",\"timestamp\":1,\"data\":{\"product\":\"top_flying_wing\",\"requestId\":\"wing-v2\",\"command\":\"wing_control\",\"params\":{\"action\":\"ascend\"}}}");
-    assert_public_response("3.0", "wing_actuator", 4001, 0U);
-
-    MQTT_App_ResetResponseState();
-    MQTT_App_HandleCommandMessage(g_mqtt_app_ctrl_topic,
-        "{\"version\":\"3.0\",\"timestamp\":1,\"data\":{\"deviceType\":\"locker_compartment\",\"requestId\":\"wing-type\",\"command\":\"wing_control\",\"params\":{\"action\":\"ascend\"}}}");
-    assert_public_response("3.0", "wing_actuator", 4004, 0U);
 
     MQTT_App_ResetResponseState();
     params = ota_params();

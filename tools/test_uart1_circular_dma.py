@@ -7,8 +7,8 @@ def main() -> None:
     uart_source = (root / "app/Core/Src/usart.c").read_text(encoding="utf-8")
     ioc = (root / "app/TopFlyingWing_App.ioc").read_text(encoding="utf-8")
     cmake = (root / "app/CMakeLists.txt").read_text(encoding="utf-8")
-    rx_header = (root / "platform/include/abox_ec800_rx.h").read_text(encoding="utf-8")
-    at_header = (root / "platform/include/abox_ec800_at.h").read_text(encoding="utf-8")
+    rx_header = (root / "platform/components/ec800/include/abox_ec800_rx.h").read_text(encoding="utf-8")
+    at_header = (root / "platform/components/ec800/include/abox_ec800_at.h").read_text(encoding="utf-8")
 
     assert "Dma.USART1_RX.0.Mode=DMA_CIRCULAR" in ioc
     assert "hdma_usart1_rx.Init.Mode = DMA_CIRCULAR" in uart_source

@@ -2,7 +2,7 @@
 param(
     [string]$BootPath = "",
     [string]$AppPath = "",
-    [string]$FirmwareVersion = "top-flying-wing-1.0.14",
+    [string]$FirmwareVersion = "top-flying-wing-1.1.0",
     [string]$BootVersion = "abox-boot-2.3.0"
 )
 
@@ -18,7 +18,7 @@ if ([string]::IsNullOrWhiteSpace($BootPath)) {
     $BootPath = Join-Path $root 'platform/targets/stm32f105_abox_boot/dist/ABox_Boot.bin'
 }
 if ([string]::IsNullOrWhiteSpace($AppPath)) {
-    $AppPath = Join-Path $root 'app/build/ABoxAppRelease/TopFlyingWing_App.bin'
+    $AppPath = Join-Path $root 'build/app/TopFlyingWing_App.bin'
 }
 foreach ($path in @($BootPath, $AppPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {

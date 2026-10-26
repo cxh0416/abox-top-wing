@@ -1,8 +1,10 @@
 # 顶飞翼 A-BOX 内部运维协议
 
-文档修订：1.2（文件名保留 `1.0` 以兼容既有引用）
+内部资料，不作为业务对接协议对外交付。
 
-当前核对固件：`top-flying-wing-1.0.14`
+文档修订：1.3（文件名保留 `1.0` 以兼容既有引用）
+
+当前源码构建标识：`top-flying-wing-1.1.0`
 
 接口兼容起点：`top-flying-wing-1.0.0`
 
@@ -12,7 +14,7 @@
 
 本文档描述 OTA 平台与顶飞翼 A-BOX 固件之间已经实现的内部运维接口，包括设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA。
 
-这些接口使用 `/internal/*` Topic，只供受控运维平台使用，不属于 [A-BOX 飞翼设备业务协议 V3](A-BOX飞翼设备业务协议-V3.0.md) 中的公共业务接口。业务平台控制飞翼时仍只使用 `/ctrl`、`/ctrl/resp`、`/status/report` 和 `/heartbeat`，不得通过内部运维接口替代业务控制。
+这些接口使用 `/internal/*` Topic，只供受控运维平台使用，不属于 [A-BOX 飞翼设备业务协议 V4](A-BOX飞翼设备业务协议-V4.0.md) 中的公共业务接口。业务平台使用 V4 的公共入口，内部运维报文继续使用 `version="2.0"`，不得通过内部运维接口替代业务控制。
 
 当前固件没有格口映射、试开通道、锁板、RS485 或旧桌面上位机接口。
 
@@ -32,7 +34,7 @@
 
 A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于主动状态、心跳和日志发送；日志属于最低优先级的尽力上报。
 
-平台发布 `/ctrl`、`/internal/config` 和 `/internal/ota` 请求时使用 QoS 1，A-BOX 订阅这些 Topic 时也必须请求 QoS 1；订阅端不得以 QoS 0 将端到端交付等级降级。平台重试必须沿用原 `requestId`，设备按平台仓库的 [A-BOX 设备公共 MQTT 协议 V3](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md) 的请求幂等规则处理。
+平台发布 `/request`、`/internal/config` 和 `/internal/ota` 请求时使用 QoS 1，A-BOX 订阅这些 Topic 时也必须请求 QoS 1；订阅端不得以 QoS 0 将端到端交付等级降级。公共请求的有效期与幂等遵循 [公共 MQTT V4](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md)；内部请求仍按第 2.4 节处理重复投递。
 
 ### 2.2 请求结构
 
@@ -59,7 +61,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 | `data.params` | Object | 是 | 命令参数 |
 | `data.product` | String | 否 | 当前内部请求为兼容既有 A-BOX V2 平台允许省略；若携带应为 `top_flying_wing` |
 
-内部请求当前不依赖 `data.product` 做设备授权，设备身份由精确 Topic 中的 `{deviceId}` 和受控 Broker 权限确定。公共 V3 业务请求独立携带并校验 `data.deviceType=wing_actuator`，不改变本内部运维接口。
+内部请求当前不依赖 `data.product` 做设备授权，设备身份由精确 Topic 中的 `{deviceId}` 和受控 Broker 权限确定。公共 V4 按 Topic 中的设备 ID 和 Manifest 的 `wing` 能力对接，不携带旧 `deviceType` 路由字段；内部身份规则不变。
 
 ### 2.3 响应结构
 
@@ -85,7 +87,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 | `202` | MQTT 新配置试用流程已启动，最终是否保存尚未确定 |
 | `4001` | 报文格式或 OTA 参数错误 |
 | `4002` | 未知的内部命令或动作 |
-| `4003` | OTA 下载或相关资源正在占用 |
+| `4003` | OTA 下载、升降控制或配置写入保护正在占用 |
 | `500` | 内部处理失败、OTA 尚未就绪、配置试用无法启动或 OTA 下载校验失败 |
 
 无法解析 JSON、缺少有效 `data` 或缺少有效 `requestId` 时，当前固件直接丢弃报文，不保证生成错误响应。
@@ -138,7 +140,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
     "result": {
       "vid": "TFW000001",
       "product": "top_flying_wing",
-      "fwVersion": "top-flying-wing-1.0.14",
+      "fwVersion": "top-flying-wing-1.1.0",
       "bootVersion": "abox-boot-2.3.0",
       "bootDescriptorValid": true,
       "bootApiVersion": 1,
@@ -153,6 +155,9 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
       "otaBusy": false,
       "mqttHost": "36.153.162.171",
       "mqttPort": 19683,
+      "tlsEnabled": false,
+      "tlsActive": false,
+      "trustedTime": false,
       "canBus": 2,
       "canBitrate": 500000,
       "feedbackTimeoutMs": 500,
@@ -166,7 +171,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 }
 ```
 
-`bootVersion` 只有在 Boot descriptor 校验有效时可信；平台应结合 `bootDescriptorValid` 判断。`stableSeedSource=local_flash` 表示稳定槽从当前运行 App 的本地 Flash 初始化，不依赖平台先发布一个引导 revision；因此 `otaBootstrapNeedsRevision` 固定为 `false`。`canSessionMode=remote_only_idle_silent` 表示完全空闲时不发送控制器查询，`queryTimeoutMs` 和 `preflightQuietMs` 分别给出单次预检查询超时与两次 `RD` 之间的静默时间。响应不返回 MQTT 用户名、密码或 OTA CA 内容。
+`bootVersion` 只有在 Boot descriptor 校验有效时可信；平台应结合 `bootDescriptorValid` 判断。`stableSeedSource=local_flash` 表示稳定槽从当前运行 App 的本地 Flash 初始化，不依赖平台先发布一个引导 revision；因此 `otaBootstrapNeedsRevision` 固定为 `false`。`canSessionMode=remote_only_idle_silent` 表示完全空闲时不发送控制器查询，`queryTimeoutMs` 和 `preflightQuietMs` 分别给出单次预检查询超时与两次 `RD` 之间的静默时间。`tlsEnabled` 表示已保存的 TLS 开关，`tlsActive` 表示当前 runtime 已就绪并启用 TLS，`trustedTime` 表示公共时钟处于可信同步质量；三者不互相替代。响应不返回 MQTT 用户名、密码或 OTA CA 内容。
 
 `otaPhase` 使用大写状态字符串，当前可能为 `IDLE`、`SEEDING_LOCAL`、`WAIT_MODEM`、`RETRY_WAIT`、`PROVISIONING`、`DOWNLOADING`、`VERIFYING`、`ERROR`，以及公共 HTTPS/UFS 下载器返回的细分阶段。平台不得按旧示例使用小写 `idle` 判断状态。
 
@@ -210,7 +215,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 
 ### 3.4 受控重启
 
-`params.action=reboot`。设备先排队发布 `code=200` 的 QoS 1 响应，确认响应发布完成后延迟约 200 ms 重启；极端情况下最迟约 3 秒强制重启。`200` 表示设备已接受重启，不表示重启后的心跳已经恢复，平台仍需等待新的心跳。
+`params.action=reboot`。设备先排队发布 `code=200` 的 QoS 1 响应，确认响应发布完成后延迟约 200 ms 重启；极端情况下最迟约 15 秒强制重启。`200` 表示设备已接受重启，不表示重启后的心跳已经恢复，平台仍需等待新的心跳。
 
 ### 3.5 修改 VID/MQTT 配置
 
@@ -227,7 +232,8 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
       "host": "36.153.162.171",
       "port": 19683,
       "username": "configured-by-platform",
-      "password": "configured-by-platform"
+      "password": "configured-by-platform",
+      "tlsEnabled": false
     }
   }
 }
@@ -235,9 +241,13 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 
 未提供的配置项沿用设备当前值。设备先通过旧连接返回 `202`，确认该响应发布成功后才切换到新配置进行最长 60 秒的连接试用：
 
-1. 新连接完成一次有效 MQTT 发布后，设备把新配置写入 Flash。
-2. 60 秒内没有完成有效发布时，设备恢复原配置并重新连接。
+1. 新连接完成一次心跳发布确认后，设备把新配置写入 Flash；Manifest 或其他报文的发布确认不能代替心跳。
+2. 60 秒内未取得新连接心跳确认，或保存失败时，设备恢复原配置并重新连接。TLS 准备阶段也按公共停止/清理流程收口。
 3. 修改 VID 后，后续 Topic 使用新 VID；平台必须等待新 VID 心跳，不能仅凭 `202` 删除旧设备身份。
+
+`tlsEnabled` 为可选 Boolean，省略时沿用当前值。开启 TLS 时必须同时配置运维提供的可信域名和 TLS 监听端口；不能把旧明文监听端口直接当成 TLS 端口。设备继续使用每设备凭据及 Broker ACL，不自动改写已保存的连接参数。
+
+升降控制未空闲或持久请求记录仍在保护期时，配置修改返回 `4003`，不会先断开连接。响应未确认时也不切换配置。
 
 用户名和密码属于敏感配置，不得写入日志、审计详情或普通业务文档。平台界面的“修改 VID”只传递新的 VID，其余 Broker 参数由服务器已安装配置补齐。
 
@@ -336,3 +346,11 @@ A-BOX 在没有待发响应、心跳、状态或 OTA 工作时，从 RAM 日志�
 3. 日志 Topic 不用于刷新设备在线时间；A-BOX 在线状态仍只由 `/heartbeat` 判定。
 4. OTA revision 必须先在平台发布为不可变文件，再创建设备任务；发布 revision 本身不得自动创建 OTA 任务。
 5. 内部接口成功不等于实物动作、Boot 跳转或真实 OTA 已验证，最终结论仍以设备心跳、版本、Boot 状态和必要的现场验收为准。
+
+## 7. TLS 与内部授时
+
+TLS runtime、模组能力探测、证书准备及重连使用公共平台组件。MQTT 使用实际探测可用的上下文 2；HTTPS OTA 保留上下文 1。CA 模式复用已核验的 `UFS:ota_ca.pem`，CA cipher profile 与已有 V4 项目一致，使用 `0xC02B`。能力不支持时不跳过校验、不自动升级模组固件；配置试用可以恢复校验有效的原明文配置，不能通过恢复过程放宽 TLS 目标的能力要求。
+
+内部授时使用 `/zxwl/abox/{deviceId}/internal/time/request` 和 `/zxwl/abox/{deviceId}/internal/time/response`，接口见 [公共内部授时 V2](../../platform/docs/protocols/A-BOX内部授时协议-V2.0.md)。设备只有在当前 TLS 连接就绪后才发起和接受授时；公共组件处理请求关联、三次采样、RTT、误差和后续刷新。Broker 需要放行这两个内部 Topic，并提供对应授时服务。
+
+CCLK 只作 TLS 启动时间，不直接满足业务有效期检查。首次可信授时尚未完成、误差超限或授时过旧时，新的升降请求返回 `4003`；停止和状态同步不依赖可信授时。新配置是否保存、业务是否可接受动作和实际是否已停止，应分别观察心跳确认、`trustedTime`、控制响应及业务状态。

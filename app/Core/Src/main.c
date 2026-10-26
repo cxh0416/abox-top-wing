@@ -43,6 +43,9 @@
 #include "mqtt_core.h"
 #include "ota_service.h"
 #include "time_base.h"
+#include "mqtt_runtime.h"
+#include "abox_stm32_monotonic.h"
+#include "abox_ec800_recovery.h"
 #include "wing_controller.h"
 /* USER CODE END Includes */
 
@@ -92,22 +95,14 @@ int fputc(int ch, FILE* f)
     return ch;
 }
 
-static char g_client_id[32];
+static ABoxEc800Recovery g_modem_recovery;
+static uint8_t g_modem_restarting;
 
 const char g_top_flying_wing_fw_version_marker[] = TOP_FLYING_WING_APP_FW_VERSION_MARKER;
 
 const char* TopFlyingWing_AppFwVersion(void)
 {
     return TOP_FLYING_WING_APP_FW_VERSION;
-}
-
-static void GenClientId(void)
-{
-    uint32_t uid0 = *(uint32_t*)0x1FFFF7E8;
-    uint32_t uid1 = *(uint32_t*)0x1FFFF7EC;
-    uint32_t uid2 = *(uint32_t*)0x1FFFF7F0;
-
-    snprintf(g_client_id, sizeof(g_client_id), "dev_%08" PRIX32 "%08" PRIX32 "%08" PRIX32, uid0, uid1, uid2);
 }
 
 static void MQTT_ConfigInit(void)
@@ -121,7 +116,7 @@ static void MQTT_ConfigInit(void)
     strncpy(g_mqtt_cfg.server_host, cfg->mqtt_host, sizeof(g_mqtt_cfg.server_host) - 1);
     g_mqtt_cfg.server_port = cfg->mqtt_port;
 
-    strncpy(g_mqtt_cfg.client_id, g_client_id, sizeof(g_mqtt_cfg.client_id) - 1);
+    strncpy(g_mqtt_cfg.client_id, cfg->vid, sizeof(g_mqtt_cfg.client_id) - 1);
     strncpy(g_mqtt_cfg.username, cfg->mqtt_username, sizeof(g_mqtt_cfg.username) - 1);
     strncpy(g_mqtt_cfg.password, cfg->mqtt_password, sizeof(g_mqtt_cfg.password) - 1);
 
@@ -202,7 +197,9 @@ int main(void)
   MX_UART5_Init();
   /* USER CODE BEGIN 2 */
 
+    ABoxStm32Monotonic_Init();
     ABox_ProductPlatform_Init();
+    ABoxEc800Recovery_Init(&g_modem_recovery, 30000U);
 
     AppLog_Init();
     TimeBase_Init();
@@ -225,7 +222,6 @@ int main(void)
     AppLog_SetLevel((AppLogLevel_t)BoardConfig_Get()->diag_log_level);
     WingController_Init();
 
-    GenClientId();
     MQTT_ConfigInit();
 
     {
@@ -238,6 +234,7 @@ int main(void)
 
     MQTT_App_Init(BoardConfig_Get()->vid);
     MQTT_Core_SetTopics(MQTT_App_GetSubTopics(), MQTT_App_GetSubTopicCount(), MQTT_App_GetHeartbeatTopic());
+    if (!MqttRuntime_Init()) APP_LOGE("MQTT", "runtime not initialized");
 
   /* USER CODE END 2 */
 
@@ -247,6 +244,12 @@ int main(void)
     {
         uint32_t now = HAL_GetTick();
         EC_Power_Task();
+        if (g_modem_restarting && EC_Power_IsOnDone())
+        {
+            g_modem_restarting = 0U;
+            ABoxEc800Rx_RequestRestart(&g_ec800_rx);
+            ABoxEc800At_OnModemReset(&g_ec800_at);
+        }
         Ec800RxService();
 
         if ((!g_mqtt_start_enable) && ((HAL_GetTick() - g_ec_restart_tick) >= 8000U))
@@ -268,6 +271,15 @@ int main(void)
             OtaService_Task();
             MQTT_Core_Task();
             MQTT_App_Task();
+            if (ABoxEc800Recovery_Poll(&g_modem_recovery, now,
+                g_ec800_at.quarantined || MqttRuntime_NeedsModemRecovery(),
+                EC_Power_IsOnDone() && !OtaService_IsBusy()))
+            {
+                MQTT_Core_SetPaused(1U);
+                ABoxEc800At_AbortAll(&g_ec800_at, ABOX_EC800_RESULT_ERROR);
+                EC_Power_StartRestartSequence();
+                g_modem_restarting = 1U;
+            }
         }
 
         (void)now;

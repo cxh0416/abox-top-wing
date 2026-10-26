@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 #include "ec800_at.h"
+#include "abox_mqtt_ec800_bridge.h"
+#include "abox_mqtt_runtime.h"
 
 typedef enum
 {
@@ -45,6 +47,8 @@ typedef enum
 typedef struct
 {
     uint8_t client_idx;
+    uint8_t tls_enabled;
+    uint8_t ssl_ctx_id;
     char server_host[64];
     uint16_t server_port;
     char client_id[64];
@@ -56,6 +60,7 @@ typedef struct
 } MQTT_CoreConfig_t;
 
 typedef void (*MQTT_CoreMsgCallback_t)(const char* topic, const char* payload);
+typedef void (*MQTT_CorePublishObserver_t)(uint64_t operation, ABoxMqttEc800PublishEvent event, void* user);
 
 typedef struct
 {
@@ -112,5 +117,23 @@ uint8_t MQTT_Core_IsIccidValid(void);
 const char* MQTT_Core_GetIccid(void);
 uint8_t MQTT_Core_IsIccidPending(void);
 uint8_t MQTT_Core_IsRxCollecting(void);
+void MQTT_Core_TransportTask(void);
+void MQTT_Core_SetSecurityReady(uint8_t ready);
+uint8_t MQTT_Core_ApplyRuntimeConfig(const ABoxMqttConfig* config);
+uint8_t MQTT_Core_IsConnected(void);
+uint8_t MQTT_Core_IsPaused(void);
+uint8_t MQTT_Core_TakeModemReady(void);
+uint8_t MQTT_Core_ClientIndex(void);
+void MQTT_Core_SetDeviceId(const char* device_id);
+int MQTT_Core_Stop(uint32_t now);
+int MQTT_Core_BorrowWorkspace(void);
+void MQTT_Core_ReturnWorkspace(void);
+void MQTT_Core_ClearBroker(void);
+uint32_t MQTT_Core_GetReadySeq(void);
+uint8_t MQTT_Core_PublishExTracked(const char* topic, const char* payload, uint8_t qos, uint8_t retain, uint64_t* operation);
+ABoxMqttReceiptStatus MQTT_Core_PublishResult(uint64_t operation);
+void MQTT_Core_SetPublishObserver(MQTT_CorePublishObserver_t observer, void* user);
+ABoxMqttEc800Bridge* MQTT_Core_Bridge(void);
+Ec800AtCore_t* MQTT_Core_AtCore(void);
 
 #endif

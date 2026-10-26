@@ -32,19 +32,31 @@ typedef enum
 
 typedef struct
 {
-    char request_id[40];
+    char request_id[65];
     WingAction action;
     uint16_t code;
     uint8_t accepted;
+    uint8_t stop_confirmed;
+    WingSnapshot snapshot;
 } WingControlResult;
+
+typedef struct
+{
+    WingReportReason reason;
+    WingSnapshot snapshot;
+    char request_id[65];
+    uint32_t tick;
+} WingReport;
 
 void WingController_Init(void);
 void WingController_Task(uint32_t now);
 void WingController_OnCanRx(CAN_HandleTypeDef* hcan);
 uint16_t WingController_Request(WingAction action, const char* request_id);
 const WingSnapshot* WingController_GetSnapshot(void);
+void WingController_CopySnapshot(WingSnapshot* snapshot);
 uint8_t WingController_TakeResult(WingControlResult* result);
 WingReportReason WingController_TakeReportReason(void);
+uint8_t WingController_TakeReport(WingReport* report);
 const char* WingReportReason_Name(WingReportReason reason);
 
 #endif

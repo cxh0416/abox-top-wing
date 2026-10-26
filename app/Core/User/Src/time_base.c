@@ -5,10 +5,12 @@
 
 #include "app_log.h"
 #include "main.h"
+#include "abox_platform_port.h"
+#include "abox_mqtt_v4.h"
 
-static uint32_t g_unix_sec = 0;   // 秒级时间（来自4G）
-static uint32_t g_sync_tick = 0;  // 同步时刻 tick
-static uint8_t g_valid = 0;
+static ABoxClock g_clock;
+static uint8_t g_cclk_mode_known, g_cclk_local;
+static uint64_t g_log_mapping_start;
 
 #define TIMEBASE_BEIJING_OFFSET_SEC (8U * 3600U)
 
@@ -25,31 +27,11 @@ static uint8_t month_days(int y, int mon)
     return days[mon - 1];
 }
 
-/* ===== 简单日期转 unix ===== */
-/* 不考虑时区，直接按 UTC 处理 */
-static uint32_t ymdhms_to_unix(int y, int mon, int d, int h, int m, int s)
-{
-    /* 简化版（够用） */
-    uint32_t days_total = 0;
-    int i;
-
-    for (i = 1970; i < y; i++) { days_total += is_leap_year(i) ? 366U : 365U; }
-
-    for (i = 1; i < mon; i++)
-    {
-        days_total += month_days(y, i);
-    }
-
-    days_total += (d - 1);
-
-    return days_total * 86400 + h * 3600 + m * 60 + s;
-}
-
 void TimeBase_Init(void)
 {
-    g_unix_sec = 0U;
-    g_sync_tick = 0U;
-    g_valid = 0U;
+    ABoxClock_Init(&g_clock);
+    g_cclk_mode_known = g_cclk_local = 0U;
+    g_log_mapping_start = 0U;
 }
 
 /*
@@ -58,65 +40,49 @@ void TimeBase_Init(void)
  */
 void TimeBase_UpdateFromCCLK(const char* line)
 {
-    int yy, MM, dd, hh, mm, ss;
-
+    uint64_t utc, mono;
+    int mode;
     if (!line) return;
-
-    if (strstr(line, "+CCLK:") == 0) return;
-
-    if (sscanf(line, "+CCLK: \"%2d/%2d/%2d,%2d:%2d:%2d", &yy, &MM, &dd, &hh, &mm, &ss) == 6)
-    {
-        int year = 2000 + yy;
-
-        if ((year < 2024) || (MM < 1) || (MM > 12) || (dd < 1) || (dd > month_days(year, MM)) || (hh < 0) ||
-            (hh > 23) || (mm < 0) || (mm > 59) || (ss < 0) || (ss > 59))
-        {
-            APP_LOGW("TIME", "invalid CCLK ignored");
-            return;
-        }
-
-        g_unix_sec = ymdhms_to_unix(year, MM, dd, hh, mm, ss);
-        g_sync_tick = HAL_GetTick();
-        g_valid = 1U;
+    if (!strcmp(line, "RDY")) { g_cclk_mode_known = 0U; return; }
+    if (sscanf(line, "+CTZU: %d", &mode) == 1) {
+        g_cclk_mode_known = (mode == 1 || mode == 3);
+        g_cclk_local = mode == 3;
+        return;
     }
+    if (!strstr(line, "+CCLK:")) return;
+    if (!g_cclk_mode_known || !ABoxClock_ParseCCLK(line, g_cclk_local, &utc)) {
+        APP_LOGW("TIME", "CCLK unknown mode or invalid");
+        return;
+    }
+    mono = ABox_PortGetMonotonicMs();
+    if (ABoxClock_Bootstrap(&g_clock, utc, mono)) g_log_mapping_start = mono;
 }
 
 uint64_t TimeBase_GetMs(void)
 {
-    if (!g_valid)
-    {
-        return 0ULL;
-    }
+    return TimeBase_GetSnapshot().utc_ms;
+}
 
-    uint32_t now = HAL_GetTick();
-    uint32_t delta = now - g_sync_tick;
-
-    return ((uint64_t)g_unix_sec * 1000ULL) + delta;
+ABoxClockSnapshot TimeBase_GetSnapshot(void)
+{ return ABoxClock_Snapshot(&g_clock, ABox_PortGetMonotonicMs()); }
+uint16_t TimeBase_CheckExpiry(uint64_t expires)
+{
+    ABoxClockSnapshot snapshot = TimeBase_GetSnapshot();
+    return ABoxMqttV4_CheckExpiry(&snapshot, expires);
+}
+int TimeBase_Synchronize(uint64_t server, uint32_t error, uint64_t sent, uint64_t received)
+{
+    int ok = ABoxClock_Synchronize(&g_clock, server, error, sent, received);
+    if (ok) g_log_mapping_start = ABox_PortGetMonotonicMs();
+    return ok;
 }
 
 uint8_t TimeBase_FormatUtcMs(char* out, uint16_t out_sz)
 {
-    char reversed[20];
-    uint64_t value;
-    uint16_t digits = 0U;
-    uint16_t i;
-
-    if ((out == 0) || (out_sz == 0U)) return 0U;
+    if (!out || !out_sz) return 0U;
     out[0] = '\0';
-    if (!g_valid) return 0U;
-
-    value = TimeBase_GetMs();
-    do
-    {
-        reversed[digits++] = (char)('0' + (value % 10ULL));
-        value /= 10ULL;
-    } while ((value != 0ULL) && (digits < (uint16_t)sizeof(reversed)));
-
-    if ((value != 0ULL) || ((uint16_t)(digits + 1U) > out_sz)) return 0U;
-
-    for (i = 0U; i < digits; i++) { out[i] = reversed[digits - i - 1U]; }
-    out[digits] = '\0';
-    return 1U;
+    if (!TimeBase_IsValid()) return 0U;
+    return (uint8_t)ABoxMqttV4_FormatInteger(out, out_sz, TimeBase_GetMs());
 }
 
 uint8_t TimeBase_FormatBeijing(char* out, uint16_t out_sz)
@@ -133,7 +99,7 @@ uint8_t TimeBase_FormatBeijing(char* out, uint16_t out_sz)
 
     if ((out == 0) || (out_sz == 0U)) return 0U;
     out[0] = '\0';
-    if (!g_valid) return 0U;
+    if (!TimeBase_IsValid()) return 0U;
 
     sec = (uint32_t)(TimeBase_GetMs() / 1000ULL);
     sec += TIMEBASE_BEIJING_OFFSET_SEC;
@@ -164,6 +130,8 @@ uint8_t TimeBase_FormatBeijing(char* out, uint16_t out_sz)
 uint8_t TimeBase_FormatBeijingFromTick(uint32_t tick, char* out, uint16_t out_sz)
 {
     int64_t ms;
+    ABoxClockSnapshot snapshot = TimeBase_GetSnapshot();
+    uint32_t age = (uint32_t)snapshot.mono_ms - tick;
     uint32_t sec;
     uint32_t days_total;
     uint32_t day_sec;
@@ -176,9 +144,10 @@ uint8_t TimeBase_FormatBeijingFromTick(uint32_t tick, char* out, uint16_t out_sz
 
     if ((out == 0) || (out_sz == 0U)) return 0U;
     out[0] = '\0';
-    if (!g_valid) return 0U;
+    if (!TimeBase_IsValid() || age > INT32_MAX ||
+        snapshot.mono_ms < age || snapshot.mono_ms - age < g_log_mapping_start) return 0U;
 
-    ms = ((int64_t)g_unix_sec * 1000LL) + (int32_t)(tick - g_sync_tick);
+    ms = (int64_t)ABoxClock_Snapshot(&g_clock, snapshot.mono_ms - age).utc_ms;
     if (ms < 0) return 0U;
 
     sec = (uint32_t)(ms / 1000LL);
@@ -207,4 +176,6 @@ uint8_t TimeBase_FormatBeijingFromTick(uint32_t tick, char* out, uint16_t out_sz
     return 1U;
 }
 
-uint8_t TimeBase_IsValid(void) { return g_valid; }
+uint8_t TimeBase_IsValid(void) { return g_clock.source != ABOX_CLOCK_NONE; }
+
+uint8_t TimeBase_IsTrusted(void) { return TimeBase_GetSnapshot().quality == ABOX_CLOCK_SYNCHRONIZED; }

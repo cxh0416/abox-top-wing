@@ -8,6 +8,7 @@
 #include "gpio.h"
 #include "main.h"
 #include "usart.h"
+#include "abox_stm32_monotonic.h"
 
 static const ABoxFlashLayout g_flash_layout = {
     APP_START_ADDR,
@@ -19,6 +20,12 @@ static uint32_t product_get_tick(void *context)
 {
     (void)context;
     return HAL_GetTick();
+}
+
+static uint64_t product_monotonic(void* context)
+{
+    (void)context;
+    return ABoxStm32Monotonic_GetMs();
 }
 
 static int product_uart_write(void *context, const uint8_t *data, uint32_t length)
@@ -83,7 +90,7 @@ void ABox_ProductPlatform_Init(void)
         0, product_get_tick, product_uart_write, product_flash_begin, product_flash_write,
         product_flash_erase_page, product_flash_end, product_enter_critical, product_exit_critical,
         product_log_write, product_ota_is_reading_raw, &g_flash_layout,
-        product_ec_power_write, product_ec_pwrkey_write
+        product_ec_power_write, product_ec_pwrkey_write, 0, product_monotonic
     };
     static const ABoxEcPowerConfig ec_power_config = {
         6000U, 2000U, 3000U, 0U, 1U

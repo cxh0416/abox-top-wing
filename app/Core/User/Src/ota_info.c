@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "main.h"
+#include "mqtt_v4_store.h"
 
 static OTA_Info_t g_ota_info_work;
 
@@ -25,6 +26,8 @@ static uint8_t OTA_Info_WriteRaw(const OTA_Info_t* info)
     uint32_t i;
 
     if (info == 0) return 0;
+    /* Never erase protected request reservations while saving configuration. */
+    if (!MQTT_V4_StoreCanErase()) return 0;
 
     HAL_FLASH_Unlock();
 

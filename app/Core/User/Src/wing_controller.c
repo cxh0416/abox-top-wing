@@ -40,8 +40,8 @@ typedef struct
     uint8_t conflict_samples;
     uint8_t direction_result_sent;
     uint8_t stop_command_sent;
-    char direction_request_id[40];
-    char stop_request_id[40];
+    char direction_request_id[65];
+    char stop_request_id[65];
 } WingSession;
 
 static WingState g_state;
@@ -49,9 +49,11 @@ static WingSession g_session;
 static WingControlResult g_results[RESULT_QUEUE_DEPTH];
 static uint8_t g_result_head;
 static uint8_t g_result_count;
-static WingReportReason g_reports[REPORT_QUEUE_DEPTH];
+static WingReport g_reports[REPORT_QUEUE_DEPTH];
 static uint8_t g_report_head;
 static uint8_t g_report_count;
+static WingSnapshot g_confirmed_stop;
+static uint8_t g_have_confirmed_stop;
 
 static CAN_HandleTypeDef* selected_can(void)
 {
@@ -62,34 +64,47 @@ static CAN_HandleTypeDef* selected_can(void)
 #endif
 }
 
-static void copy_id(char dst[40], const char* src)
+static void copy_id(char dst[65], const char* src)
 {
     if (!src) { dst[0] = '\0'; return; }
-    strncpy(dst, src, 39U);
-    dst[39] = '\0';
+    strncpy(dst, src, 64U);
+    dst[64] = '\0';
 }
 
 static void push_report(WingReportReason reason)
 {
     uint8_t tail;
     if (reason == WING_REPORT_NONE) return;
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
     if (g_report_count &&
-        g_reports[(uint8_t)((g_report_head + g_report_count - 1U) % REPORT_QUEUE_DEPTH)] == reason)
-        return;
+        g_reports[(uint8_t)((g_report_head + g_report_count - 1U) % REPORT_QUEUE_DEPTH)].reason == reason)
+    {
+        tail = (uint8_t)((g_report_head + g_report_count - 1U) % REPORT_QUEUE_DEPTH);
+        goto capture;
+    }
     if (g_report_count >= REPORT_QUEUE_DEPTH)
     {
         g_report_head = (uint8_t)((g_report_head + 1U) % REPORT_QUEUE_DEPTH);
         g_report_count--;
     }
     tail = (uint8_t)((g_report_head + g_report_count) % REPORT_QUEUE_DEPTH);
-    g_reports[tail] = reason;
     g_report_count++;
+capture:
+    g_reports[tail].reason = reason;
+    g_reports[tail].snapshot = g_state.snapshot;
+    g_reports[tail].tick = HAL_GetTick();
+    copy_id(g_reports[tail].request_id, g_session.stop_request_id[0] ?
+            g_session.stop_request_id : g_session.direction_request_id);
+    __set_PRIMASK(irq);
 }
 
 static void push_result(const char* request_id, WingAction action, uint16_t code)
 {
     uint8_t tail;
     if (!request_id || !request_id[0]) return;
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
     if (g_result_count >= RESULT_QUEUE_DEPTH)
     {
         g_result_head = (uint8_t)((g_result_head + 1U) % RESULT_QUEUE_DEPTH);
@@ -101,7 +116,11 @@ static void push_result(const char* request_id, WingAction action, uint16_t code
     g_results[tail].action = action;
     g_results[tail].code = code;
     g_results[tail].accepted = code == 200U ? 1U : 0U;
+    g_results[tail].snapshot = g_state.snapshot;
+    g_results[tail].stop_confirmed = action == WING_ACTION_STOP && code == 200U &&
+        g_state.snapshot.status_fresh && !g_state.raw_moving && !g_state.snapshot.fault_code;
     g_result_count++;
+    __set_PRIMASK(irq);
 }
 
 static uint8_t send_frame(const uint8_t data[8])
@@ -155,9 +174,19 @@ static void clear_session(void)
 
 static void finish_idle(WingControlOwner owner)
 {
+    char request_id[65];
+    copy_id(request_id, g_session.stop_request_id[0] ? g_session.stop_request_id : g_session.direction_request_id);
     clear_session();
     WingState_SetIdleSilent(&g_state, owner);
     push_report(WING_REPORT_STATE_CHANGED);
+    /* Preserve the observation at stop confirmation, before idle-silent
+     * deliberately invalidates live feedback. This does not change control. */
+    {
+        WingReport* report = &g_reports[(g_report_head + g_report_count - 1U) % REPORT_QUEUE_DEPTH];
+        copy_id(report->request_id, request_id);
+        if (g_have_confirmed_stop) report->snapshot = g_confirmed_stop;
+        g_have_confirmed_stop = 0U;
+    }
 }
 
 static void fail_direction(uint16_t code, WingControlOwner owner)
@@ -208,6 +237,8 @@ static void finish_stop(void)
     if (g_session.stop_request_id[0])
         push_result(g_session.stop_request_id, WING_ACTION_STOP, 200U);
     WingState_ConfirmStop(&g_state, g_session.stop_request_id, g_session.stop_request_id[0] ? 1U : 0U);
+    g_have_confirmed_stop = g_state.snapshot.status_fresh && !g_state.snapshot.fault_code;
+    g_confirmed_stop = g_state.snapshot;
     finish_idle(owner);
 }
 
@@ -252,6 +283,7 @@ static void assess_running_status(uint32_t now)
 
 void WingController_Init(void)
 {
+    g_have_confirmed_stop = 0U;
     CAN_FilterTypeDef filter;
     WingState_Init(&g_state);
     clear_session();
@@ -280,7 +312,7 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
 
     if (action == WING_ACTION_STOP)
     {
-        if (g_session.state == SESSION_IDLE) return 200U;
+        /* Idle also needs feedback confirmation for an explicit stop. */
         if (g_session.state == SESSION_WAIT_STOP_ACK || g_session.state == SESSION_WAIT_STOP_STATUS)
             return 5003U;
         return begin_stop(STOP_USER, request_id, now) ? 0U : 5001U;
@@ -499,24 +531,49 @@ void WingController_Task(uint32_t now)
 }
 
 const WingSnapshot* WingController_GetSnapshot(void) { return &g_state.snapshot; }
+void WingController_CopySnapshot(WingSnapshot* snapshot)
+{
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    if (snapshot) *snapshot = g_state.snapshot;
+    __set_PRIMASK(irq);
+}
 
 uint8_t WingController_TakeResult(WingControlResult* result)
 {
-    if (!result || !g_result_count) return 0U;
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    if (!result || !g_result_count) { __set_PRIMASK(irq); return 0U; }
     *result = g_results[g_result_head];
     g_result_head = (uint8_t)((g_result_head + 1U) % RESULT_QUEUE_DEPTH);
     g_result_count--;
+    __set_PRIMASK(irq);
     return 1U;
 }
 
 WingReportReason WingController_TakeReportReason(void)
 {
     WingReportReason reason;
-    if (!g_report_count) return WING_REPORT_NONE;
-    reason = g_reports[g_report_head];
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    if (!g_report_count) { __set_PRIMASK(irq); return WING_REPORT_NONE; }
+    reason = g_reports[g_report_head].reason;
     g_report_head = (uint8_t)((g_report_head + 1U) % REPORT_QUEUE_DEPTH);
     g_report_count--;
+    __set_PRIMASK(irq);
     return reason;
+}
+
+uint8_t WingController_TakeReport(WingReport* report)
+{
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    if (!report || !g_report_count) { __set_PRIMASK(irq); return 0U; }
+    *report = g_reports[g_report_head];
+    g_report_head = (uint8_t)((g_report_head + 1U) % REPORT_QUEUE_DEPTH);
+    g_report_count--;
+    __set_PRIMASK(irq);
+    return 1U;
 }
 
 const char* WingReportReason_Name(WingReportReason reason)

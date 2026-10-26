@@ -93,7 +93,7 @@ uint8_t BoardConfig_Save(const BoardConfigStore_t* cfg)
 }
 
 uint8_t BoardConfig_SetMqtt(const char* vid, const char* host, uint16_t port,
-                            const char* username, const char* password)
+                            const char* username, const char* password, uint8_t tls_enabled)
 {
     g_board_cfg_work = g_board_cfg;
     if (vid) copy_text(g_board_cfg_work.vid, sizeof(g_board_cfg_work.vid), vid);
@@ -101,6 +101,8 @@ uint8_t BoardConfig_SetMqtt(const char* vid, const char* host, uint16_t port,
     if (port) g_board_cfg_work.mqtt_port = port;
     if (username) copy_text(g_board_cfg_work.mqtt_username, sizeof(g_board_cfg_work.mqtt_username), username);
     if (password) copy_text(g_board_cfg_work.mqtt_password, sizeof(g_board_cfg_work.mqtt_password), password);
+    if (tls_enabled) g_board_cfg_work.flags |= BOARD_CONFIG_FLAG_MQTT_TLS;
+    else g_board_cfg_work.flags &= (uint16_t)~BOARD_CONFIG_FLAG_MQTT_TLS;
     return BoardConfig_Save(&g_board_cfg_work);
 }
 

@@ -150,8 +150,12 @@ static void test_idle_silent_and_correlation(void)
     assert(snapshot->motion_state == WING_MOTION_UNKNOWN);
     assert(!snapshot->status_fresh && !snapshot->controller_online_known);
     assert(!snapshot->have_position && !snapshot->have_limits);
-    assert(WingController_Request(WING_ACTION_STOP, "idle-stop") == 200U);
-    assert(count_command('S', 'T') == 0U);
+    assert(WingController_Request(WING_ACTION_STOP, "idle-stop") == 0U);
+    assert(count_command('S', 'T') == 1U);
+    ack(WING_ACTION_STOP, 300003U);
+    status(30U, 0U, 300004U);
+    WingControlResult result = take_result();
+    assert(result.code == 200U && result.stop_confirmed);
 }
 
 static void test_preflight_local_motion_rejected(void)

@@ -20,15 +20,17 @@ def main() -> None:
     boot_core = read(BOOT / "Core/User/Src/ota_core.c")
     descriptor = read(BOOT / "Core/User/Src/boot_descriptor.c")
     app_core = read(ROOT / "app/Core/User/Src/ota_service.c")
-    at_core = read(ROOT / "platform/components/ec800/abox_ec800_at.c")
-    downloader = read(ROOT / "platform/components/ota/abox_https_ufs_downloader.c")
+    at_core = read(ROOT / "platform/components/ec800/src/abox_ec800_at.c")
+    downloader = read(ROOT / "platform/components/ota/src/abox_https_ufs_downloader.c")
     info = read(ROOT / "app/Core/User/Src/mqtt_app_cmd.c")
 
     for source in (app_cfg, boot_cfg):
         assert "BOOT_STATE_A_ADDR 0x0803E800U" in source
         assert "BOOT_STATE_B_ADDR 0x0803F000U" in source
         assert "APP_END_ADDR (BOOT_STATE_A_ADDR - 1U)" in source
-    assert "LENGTH = 0x36800" in app_linker
+    assert "OTA_INFO_ADDR 0x0803F800U" in app_cfg
+    assert "DEVICE_CONFIG_ADDR 0x0803F800U" in boot_cfg
+    assert "ORIGIN = 0x08008000, LENGTH = 0x36800" in app_linker
     assert "ORIGIN = 0x08000000, LENGTH = 0x7F00" in boot_linker
     assert "ORIGIN = 0x08007F00, LENGTH = 0x100" in boot_linker
     assert "0x2000BC40" in boot_linker
@@ -58,8 +60,8 @@ def main() -> None:
     assert '"otaDownloader", "app"' in info
     assert '"stableSeedSource", ABoxBootV2App_StableSeedSource()' in info
     assert '"otaBootstrapNeedsRevision", 0' in info
-    assert '"ABOX_STABLE_SEED_SOURCE=" ABOX_BOOT_V2_STABLE_SEED_SOURCE' in read(ROOT / "platform/components/boot_v2/abox_boot_v2_app.c")
-    assert '#define ABOX_BOOT_V2_STABLE_SEED_SOURCE "local_flash"' in read(ROOT / "platform/include/abox_boot_v2_app.h")
+    assert '"ABOX_STABLE_SEED_SOURCE=" ABOX_BOOT_V2_STABLE_SEED_SOURCE' in read(ROOT / "platform/components/boot_v2/src/abox_boot_v2_app.c")
+    assert '#define ABOX_BOOT_V2_STABLE_SEED_SOURCE "local_flash"' in read(ROOT / "platform/components/boot_v2/include/abox_boot_v2_app.h")
     assert '"otaReady"' in info
     assert '"otaState"' in info
 

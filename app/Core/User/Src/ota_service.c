@@ -7,6 +7,8 @@
 #include "app_version.h"
 #include "boot_cfg.h"
 #include "mqtt_core.h"
+#include "mqtt_runtime.h"
+#include "main.h"
 
 typedef struct { Ec800AtCore_t *at; ABoxBootV2AtDoneFn done; void *done_user; ABoxBootV2AtEventFn events; void *events_user; } OtaAdapter_t;
 static OtaAdapter_t g_adapter;
@@ -21,7 +23,11 @@ static int pending(void*c){OtaAdapter_t*a=c;return EC800_AT_HasPending(a->at,EC8
 static int active(void*c){OtaAdapter_t*a=c;return EC800_AT_IsActiveOwner(a->at,EC800_AT_OWNER_OTA)?1:0;}
 static void cancel(void*c){OtaAdapter_t*a=c;EC800_AT_CancelOwner(a->at,EC800_AT_OWNER_OTA);}
 static void event(Ec800AtEvent_t e,const uint8_t*d,uint16_t n,void*u){OtaAdapter_t*a=u;if(a->events)a->events((ABoxBootV2AtEvent)e,d,n,a->events_user);}
-static void events(void*c,ABoxBootV2AtEventFn f,void*u){OtaAdapter_t*a=c;a->events=f;a->events_user=u;EC800_AT_RegisterUrcHandler(a->at,EC800_AT_OWNER_OTA,event,a);}
+static int events(void*c,ABoxBootV2AtEventFn f,void*u){OtaAdapter_t*a=c;a->events=f;a->events_user=u;return EC800_AT_RegisterUrcHandler(a->at,EC800_AT_OWNER_OTA,event,a);}
+static uint8_t mqtt_client(void*c){(void)c;return MQTT_Core_ClientIndex();}
+static int mqtt_stop(void*c,uint32_t n){(void)c;return MqttRuntime_StopFirst(n);}
+static int borrow(void*c){(void)c;return MQTT_Core_BorrowWorkspace();}
+static void release(void*c){(void)c;MQTT_Core_ReturnWorkspace();}
 static void pause(void*c,uint8_t p){(void)c;MQTT_Core_SetPaused(p);}
 static void logline(void*c,uint8_t l,const char*m){(void)c;if(l>=3U)APP_LOGE("OTA","%s",m);else if(l==2U)APP_LOGW("OTA","%s",m);else APP_LOGI("OTA","%s",m);}
 static uint32_t overflow(void*c){OtaAdapter_t*a=c;return EC800_AT_RxOverflowCount(a->at);}
@@ -31,7 +37,8 @@ void OtaService_Init(Ec800AtCore_t *at)
  static ABoxBootV2AppPort p;static ABoxBootV2AppConfig c;static const ABoxBootV2Layout layout={BOOT_STATE_A_ADDR,BOOT_STATE_B_ADDR,BOOT_STATE_PAGE_SIZE,APP_START_ADDR,APP_END_ADDR,0x20000000U,0x20010000U};extern uint8_t __app_image_end;
  memset(&g_adapter,0,sizeof(g_adapter));g_adapter.at=at;memset(&p,0,sizeof(p));p.context=&g_adapter;p.tick_ms=tick;p.submit=submit;p.send_payload=send;p.begin_raw_read=raw;p.has_pending=pending;p.is_active=active;p.cancel=cancel;p.register_events=events;p.mqtt_pause=pause;p.log=logline;p.transfer_buffer=g_ota_transfer_buffer;p.transfer_buffer_size=sizeof(g_ota_transfer_buffer);p.rx_overflow_count=overflow;
  memset(&c,0,sizeof(c));c.ota_origin="https://ota.zxwl.ntiov.com:20443";c.revision_product="top_flying_wing";c.artifact_name="top_flying_wing_app.bin";c.version_prefix="top-flying-wing-";c.running_version=TopFlyingWing_AppFwVersion();c.ca_pem=(const uint8_t*)g_ota_ca_pem;c.ca_pem_length=(uint32_t)(sizeof(g_ota_ca_pem)-1U);c.app_start_addr=APP_START_ADDR;c.app_size=(uint32_t)(&__app_image_end-(uint8_t*)APP_START_ADDR);c.app_max_size=APP_MAX_SIZE;
- (void)ABoxBootV2_StateBindLayout(&layout);(void)ABoxBootV2App_Init(&p,&c);
+ p.mqtt_client_index=mqtt_client;p.mqtt_stop=mqtt_stop;p.workspace_borrow=borrow;p.workspace_return=release;
+ (void)ABoxBootV2_StateBindLayout(&layout);if(!ABoxBootV2App_Init(&p,&c))APP_LOGE("OTA","initialization failed");
 }
 uint8_t OtaService_BeginProvisioning(void){return(uint8_t)ABoxBootV2App_BeginProvisioning();}void OtaService_Task(void){ABoxBootV2App_Task();}
 uint8_t OtaService_IsProvisioned(void){return(uint8_t)ABoxBootV2App_IsProvisioned();}uint8_t OtaService_IsReady(void){return(uint8_t)ABoxBootV2App_IsReady();}uint8_t OtaService_IsBusy(void){return(uint8_t)ABoxBootV2App_IsBusy();}

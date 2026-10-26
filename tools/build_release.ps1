@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Release')] [string] $Configuration = 'Release',
-    [string] $FirmwareVersion = 'top-flying-wing-1.1.3'
+    [string] $FirmwareVersion = 'top-flying-wing-1.1.4'
 )
 
 $ErrorActionPreference = 'Stop'

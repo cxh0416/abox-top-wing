@@ -67,8 +67,19 @@ static void approve(void)
     assert(s->enrollment.state==ABOX_ENROLLMENT_TRIAL);
 }
 static void step(void) { ++tick;WingEnrollment_Task(); }
-int main(void)
+int main(int argc, char** argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--describe"))
+    {
+        ABoxEnrollmentIdentity id;
+        boot();
+        ABoxEnrollmentService* s = WingEnrollment_TestService();
+        assert(s->port.identity(s->port.user, &id));
+        printf("{\"hardwareContract\":\"%s\",\"tlsProfileId\":%u,\"requirePsk\":%u}\n",
+            id.hardware_contract, s->enrollment.expected_tls_profile_id,
+            s->enrollment.require_psk);
+        return 0;
+    }
     boot();assert(!strncmp(WingEnrollment_DeviceId(),"TFW-",4));
     for(unsigned i=0;i<8;++i)step();assert(!applied && !commits);
     approve();step();assert(applied==1 && !commits);

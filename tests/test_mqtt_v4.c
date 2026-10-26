@@ -364,8 +364,21 @@ static void test_legacy_flash_compatibility(void)
     request("legacy-1","ascend"); assert(code()==4003 && !g_tx_count);
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--describe"))
+    {
+        /* Export packets from the production bootstrap, without exercising CAN. */
+        reset_all(); MQTT_V4_ReportTask(); confirm_publish(); confirm_publish();
+        assert(publish_count == 3U);
+        printf("{\"packets\":[");
+        for (unsigned i = 0; i < 3U; ++i)
+            printf("%s{\"topic\":\"%s\",\"qos\":%u,\"retain\":%u,\"payload\":%s}",
+                i ? "," : "", published[i].topic, published[i].qos,
+                published[i].retain, published[i].payload);
+        puts("]}");
+        return 0;
+    }
     wing_control_regression();
     test_expiry_and_strict_input(); test_replay_and_reboot(); test_uncertain_and_torn_records();
     test_stop_confirmation_and_long_ids(); test_endpoint_turnaround(); test_capacity_preserves_protected_requests(); test_bootstrap_sync_and_report_qos();

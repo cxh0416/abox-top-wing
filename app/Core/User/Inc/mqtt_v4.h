@@ -10,6 +10,7 @@
 #define MQTT_V4_REQUEST_ID_SIZE 65U
 
 uint8_t MQTT_V4_ValidDeviceId(const char* value);
+void MQTT_V4_Task(void);
 void MQTT_V4_HandleRequest(const char* text);
 void MQTT_V4_IdentityChanged(const char* device_id);
 void MQTT_V4_HandleResult(const WingControlResult* result);

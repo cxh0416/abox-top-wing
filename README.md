@@ -22,7 +22,7 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 
 `top-flying-wing-1.1.0` 使用公共 V4；旧 V3 报文和旧控制 Topic 不再作为本构建的业务入口。现有 V3 设备继续按 [飞翼业务 V3](docs/protocols/A-BOX飞翼设备业务协议-V3.0.md) 对接，平台按实际心跳的 `version` 区分。
 
-公共通信直接复用平台的 EC800 bridge、TLS runtime、v4 摘要/有效期、Cloud 启动调度和时钟组件。TLS 通过内部 `set_mqtt` 的 `tlsEnabled` 配置，沿用 CA 校验并探测实际模组 TLS 上下文能力；内部授时仅在 TLS 连接上进行。升降需要可信授时，未完成时返回 `4003`，显式 `stop` 不受授时影响。已有 Broker 配置不会因升级被自动改写。
+公共通信直接复用平台的 EC800 bridge、TLS runtime、V4 请求校验/有效期、报文编码、Cloud 启动调度、重连退避和内部授时组件。新升降请求统一使用平台的持久幂等引擎及 EC800 UFS 双副本日志，飞翼只提供业务回调、存储命名空间和共享工作区；旧 Flash 记录保留只读兼容保护。TLS 通过内部 `set_mqtt` 的 `tlsEnabled` 配置，沿用 CA 校验并探测实际模组 TLS 上下文能力；内部授时仅在 TLS 连接上进行。升降需要可信授时，未完成时返回 `4003`，显式 `stop` 不受授时影响。已有 Broker 配置不会因升级被自动改写。
 
 内部 Topic、TLS 配置及 OTA 状态语义见 [顶飞翼 A-BOX 内部运维协议](docs/protocols/顶飞翼A-BOX内部运维协议-1.0.md)。
 

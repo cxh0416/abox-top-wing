@@ -10,6 +10,7 @@
 
 #define BEGIN_COMMIT 0x34574247U
 #define COMPLETE_COMMIT 0x34574350U
+#define UFS_INITIALIZED 0x3149344DU
 _Static_assert(sizeof(OTA_Info_t) <= MQTT_V4_STORE_OFFSET, "V4 journal overlaps configuration");
 _Static_assert(sizeof(MqttV4Record) == 168U, "V4 journal layout changed");
 _Static_assert(MQTT_V4_STORE_OFFSET + MQTT_V4_STORE_SLOTS * sizeof(MqttV4Record) <= OTA_INFO_PAGE_SIZE,
@@ -48,26 +49,6 @@ static int valid(const MqttV4Record* r)
            r->header_crc == crc(r, offsetof(MqttV4Record, header_crc));
 }
 
-static int program(unsigned slot, size_t offset, const void* data, size_t length)
-{
-    uint32_t address = MQTT_V4_STORE_OFFSET + slot * sizeof(MqttV4Record) + offset;
-    if (slot >= MQTT_V4_STORE_SLOTS || offset + length > sizeof(MqttV4Record) || (length & 3U)) return 0;
-#ifdef TOP_WING_HOST_TEST
-    return MQTT_V4_TestProgram(address, data, (uint32_t)length);
-#else
-    const uint8_t* bytes = data;
-    uint32_t word;
-    int ok = HAL_FLASH_Unlock() == HAL_OK;
-    for (size_t i = 0; ok && i < length; i += 4U)
-    {
-        memcpy(&word, bytes + i, sizeof(word));
-        ok = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, OTA_INFO_ADDR + address + i, word) == HAL_OK;
-    }
-    HAL_FLASH_Lock();
-    return ok && !memcmp((const void*)(OTA_INFO_ADDR + address), data, length);
-#endif
-}
-
 int MQTT_V4_StoreFind(const char* device_id, const char* id, MqttV4Record* record, int* slot)
 {
     const MqttV4Record* entries = records();
@@ -98,43 +79,38 @@ uint8_t MQTT_V4_StoreCanErase(void)
     return 1U;
 }
 
-int MQTT_V4_StoreBegin(const char* device_id, const char* id, const uint8_t digest[32], uint64_t expires_at)
+/* Independent first-use marker, outside the checksummed BoardConfig and
+ * the legacy records. Ordinary configuration writes preserve this word. */
+static uint32_t marker(void)
 {
-    MqttV4Record record;
-    int slot = -1;
-    for (unsigned i = 0; i < MQTT_V4_STORE_SLOTS; ++i)
-        if (empty(&records()[i])) { slot = (int)i; break; }
-    if (slot < 0 && MQTT_V4_StoreCanErase())
-    {
-        OTA_Info_t info;
-        OTA_Info_Load(&info);
-        if (OTA_Info_Save(&info)) slot = 0;
-    }
-    if (slot < 0) return -1;
-    memset(&record, 0xFF, sizeof(record));
-    record.protect_until = ABoxMqttV4_IdempotencyProtectUntil(expires_at);
-    memcpy(record.digest, digest, sizeof(record.digest));
-    memset(record.request_id, 0, sizeof(record.request_id));
-    memcpy(record.request_id, id, strlen(id));
-    memset(record.device_id, 0, sizeof(record.device_id));
-    memcpy(record.device_id, device_id, strlen(device_id));
-    record.header_crc = crc(&record, offsetof(MqttV4Record, header_crc));
-    record.begin_commit = BEGIN_COMMIT;
-    if (!program((unsigned)slot, 0, &record, offsetof(MqttV4Record, begin_commit)) ||
-        !program((unsigned)slot, offsetof(MqttV4Record, begin_commit), &record.begin_commit, sizeof(record.begin_commit))) return -2;
-    return slot;
+#ifdef TOP_WING_HOST_TEST
+    uint32_t value;
+    memcpy(&value, MQTT_V4_TestFlash() + offsetof(OTA_Info_t, reserved), sizeof(value));
+    return value;
+#else
+    return *(const uint32_t*)(OTA_INFO_ADDR + offsetof(OTA_Info_t, reserved));
+#endif
 }
 
-int MQTT_V4_StoreComplete(int slot, uint16_t code, uint64_t timestamp)
+int MQTT_V4_StoreInitialized(void)
 {
-    MqttV4Record record;
-    if (slot < 0 || slot >= (int)MQTT_V4_STORE_SLOTS || !valid(&records()[slot])) return 0;
-    record = records()[slot];
-    record.code = code;
-    record.timestamp = timestamp;
-    record.response_crc = crc(&record.code, offsetof(MqttV4Record, response_crc) - offsetof(MqttV4Record, code));
-    record.complete_commit = COMPLETE_COMMIT;
-    return program((unsigned)slot, offsetof(MqttV4Record, code), &record.code,
-                   offsetof(MqttV4Record, complete_commit) - offsetof(MqttV4Record, code)) &&
-           program((unsigned)slot, offsetof(MqttV4Record, complete_commit), &record.complete_commit, sizeof(record.complete_commit));
+    uint32_t value = marker();
+    return value == UFS_INITIALIZED ? 1 : value == UINT32_MAX ? 0 : -1;
+}
+
+int MQTT_V4_StoreMarkInitialized(void)
+{
+    uint32_t value = UFS_INITIALIZED;
+    if (marker() == value) return 1;
+    if (marker() != UINT32_MAX) return 0;
+#ifdef TOP_WING_HOST_TEST
+    if (!MQTT_V4_TestProgram(offsetof(OTA_Info_t, reserved), &value, sizeof(value))) return 0;
+#else
+    if (HAL_FLASH_Unlock() != HAL_OK) return 0;
+    HAL_StatusTypeDef status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
+        OTA_INFO_ADDR + offsetof(OTA_Info_t, reserved), value);
+    HAL_FLASH_Lock();
+    if (status != HAL_OK) return 0;
+#endif
+    return marker() == value;
 }

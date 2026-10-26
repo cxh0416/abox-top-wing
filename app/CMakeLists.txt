@@ -65,6 +65,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/User/Src/mqtt_app_hb.c
     Core/User/Src/mqtt_v4.c
     Core/User/Src/mqtt_v4_store.c
+    Core/User/Src/mqtt_v4_persistence.c
     Core/User/Src/mqtt_runtime.c
     Core/User/Src/time_sync.c
     Core/User/Src/mqtt_core.c
@@ -101,6 +102,10 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     abox::mqtt_runtime
     abox::mqtt_ec800
     abox::cloud_service
+    abox::cloud_v4
+    abox::mqtt_request
+    abox::mqtt_idem_ufs
+    abox::ec800_ufs_at
 
     # Add user defined libraries
 )

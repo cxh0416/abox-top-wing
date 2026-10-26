@@ -2,7 +2,8 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "abox_cloud_response.h"
+#include "abox_cloud_v4.h"
+#include "abox_mqtt_request.h"
 #include "abox_cloud_service.h"
 #include "abox_mqtt_digest.h"
 #include "abox_platform_port.h"
@@ -17,12 +18,13 @@
 typedef struct
 {
     char id[65];
+    char device_id[33];
     uint8_t digest[32];
-    uint64_t timestamp, protect_until;
+    uint64_t timestamp;
     uint32_t tick;
     uint16_t code;
     int8_t store_slot;
-    uint8_t valid, inflight, sync, retry_response;
+    uint8_t valid, inflight, sync, retry_response, awaiting_dispatch, completing, cancelled;
     WingAction action;
 } Request;
 static Request requests[CACHE_COUNT];
@@ -41,7 +43,7 @@ static WingReport report;
 static uint32_t sample_tick;
 static char bound_device_id[33];
 
-static const ABoxMqttCommandDescriptor commands[] = {{"wing_control", "wing", ABOX_MQTT_COMMAND_DISCRETE_ACTION}};
+static const ABoxMqttCommandDescriptor commands[] = {{"wing_control", "wing", ABOX_MQTT_COMMAND_PARAMETERIZED}};
 static const ABoxMqttReportDescriptor reports[] = {{"wing_status", "wing", "state"}, {"wing_position", "wing", "telemetry"}};
 static const ABoxMqttProfileDescriptor profile = {"wing", "1.0", commands, 1U, reports, 2U};
 
@@ -51,40 +53,36 @@ uint8_t MQTT_V4_ValidDeviceId(const char* value)
     return ABoxMqttV4_BuildTopic(topic, sizeof(topic), value, ABOX_MQTT_V4_TOPIC_REQUEST);
 }
 
-static int request_id_valid(const char* id)
+static int direction(void* context, const cJSON* params)
 {
-    size_t n = id ? strlen(id) : 0U;
-    if (!n || n > 64U) return 0;
-    for (size_t i = 0; i < n; ++i)
-    {
-        char c = id[i];
-        int alnum = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
-        if (!alnum && (!i || (c != '.' && c != '_' && c != ':' && c != '-'))) return 0;
-    }
-    return 1;
+    const cJSON* action = cJSON_GetObjectItemCaseSensitive(params, "action");
+    (void)context;
+    return cJSON_IsString(action) && (!strcmp(action->valuestring, "ascend") || !strcmp(action->valuestring, "descend"));
 }
 
-static int integer(const cJSON* node, uint64_t* value)
+static int stopping(void* context, const cJSON* params)
 {
-    if (!cJSON_IsNumber(node) || node->valuedouble < 0 || node->valuedouble > 9007199254740991.0) return 0;
-    *value = (uint64_t)node->valuedouble;
-    return (double)*value == node->valuedouble;
+    const cJSON* action = cJSON_GetObjectItemCaseSensitive(params, "action");
+    (void)context;
+    return cJSON_IsString(action) && !strcmp(action->valuestring, "stop");
 }
 
-static int count_bytes(void* context, const char* bytes, size_t length)
-{
-    size_t* count = context;
-    (void)bytes;
-    *count += length;
-    return *count <= 768U;
-}
+static const ABoxMqttOperation operations[] = {
+    {"wing_control", "wing", ABOX_MQTT_COMMAND_DISCRETE_ACTION, ABOX_MQTT_EXPIRY_REQUIRED, 5000U, direction, NULL, NULL},
+    {"wing_control", "wing", ABOX_MQTT_COMMAND_SAFETY_STOP, ABOX_MQTT_EXPIRY_FORBIDDEN, 0U, stopping, NULL, NULL}
+};
 
 void MQTT_V4_IdentityChanged(const char* id)
 {
     WingReport old_report;
     WingControlResult old_result;
     if (!strcmp(bound_device_id, id)) return;
-    memset(requests, 0, sizeof(requests));
+    for (unsigned i = 0; i < CACHE_COUNT; ++i)
+    {
+        Request* r = &requests[i];
+        if (r->inflight && r->store_slot >= 0) r->cancelled = 1U;
+        else memset(r, 0, sizeof(*r));
+    }
     strcpy(bound_device_id, id);
     /* Configuration changes are admitted only while control is idle. */
     while (WingController_TakeReport(&old_report)) { }
@@ -109,40 +107,42 @@ static const char* message(uint16_t code)
     }
 }
 
-static int sync_result(void* context, char* out, size_t capacity)
+static int encode_response(const char* id, uint16_t code, uint64_t timestamp, uint8_t sync)
 {
-    static const char json[] = "{\"expectedStates\":[{\"reportName\":\"wing_status\"}]}";
-    (void)context;
-    if (sizeof(json) > capacity) return 0;
-    memcpy(out, json, sizeof(json));
-    return 1;
+    cJSON* result = sync && code == 200U ? cJSON_Parse("{\"expectedStates\":[{\"reportName\":\"wing_status\"}]}") : NULL;
+    if (sync && code == 200U && !result) return 0;
+    uint16_t encoded = ABoxCloudV4_Response(response_buf, sizeof(response_buf), timestamp, id, code, message(code), result);
+    cJSON_Delete(result);
+    return encoded == code;
 }
 
 static uint8_t respond(const char* id, uint16_t code, uint64_t timestamp, uint8_t sync)
 {
-    char ts[21];
-    if (!ABoxMqttV4_FormatInteger(ts, sizeof(ts), timestamp) ||
-        !ABoxCloudResponse_EncodeResult(response_buf, sizeof(response_buf), MQTT_APP_PUBLIC_VERSION_STR, ts, NULL,
-            id, code, message(code), sync && code == 200U ? sync_result : NULL, NULL)) return 0U;
-    return MQTT_App_QueuePublicResponse(response_buf, id, code);
+    return encode_response(id, code, timestamp, sync) && MQTT_App_QueuePublicResponse(response_buf, id, code);
+}
+
+static void replay_response(const char* response, const char* id)
+{
+    cJSON* root = ABoxMqttDigest_Parse(response, strlen(response));
+    const cJSON* code = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "data"), "code");
+    if (cJSON_IsNumber(code) && code->valuedouble > 0 && code->valuedouble <= UINT16_MAX)
+        (void)MQTT_App_QueuePublicResponse(response, id, (uint16_t)code->valuedouble);
+    cJSON_Delete(root);
 }
 
 static Request* find(const char* id)
 {
     for (unsigned i = 0; i < CACHE_COUNT; ++i)
-        if (requests[i].valid && !strcmp(requests[i].id, id)) return &requests[i];
+        if (requests[i].valid && !strcmp(requests[i].device_id, g_mqtt_app_device_id) && !strcmp(requests[i].id, id)) return &requests[i];
     return NULL;
 }
 
 static Request* reserve(void)
 {
-    ABoxClockSnapshot clock = TimeBase_GetSnapshot();
     for (unsigned i = 0; i < CACHE_COUNT; ++i)
     {
         Request* r = &requests[i];
-        if (!r->valid || (!r->inflight && !r->retry_response &&
-            (r->protect_until ? (clock.quality == ABOX_CLOCK_SYNCHRONIZED && clock.utc_ms > clock.error_ms &&
-                clock.utc_ms - clock.error_ms > r->protect_until) : HAL_GetTick() - r->tick > 600000U)))
+        if (!r->valid || (!r->inflight && !r->retry_response && HAL_GetTick() - r->tick > 600000U))
         { memset(r, 0, sizeof(*r)); r->store_slot = -1; return r; }
     }
     return NULL;
@@ -151,9 +151,56 @@ static Request* reserve(void)
 static void complete(Request* r, uint16_t code)
 {
     r->timestamp = TimeBase_GetMs();
-    if (r->store_slot >= 0 && !MQTT_V4_StoreComplete(r->store_slot, code, r->timestamp)) code = 5001U;
-    r->code = code; r->inflight = 0U;
-    r->retry_response = !respond(r->id, code, r->timestamp, r->sync);
+    r->code = code;
+    r->awaiting_dispatch = 0U;
+    if (r->store_slot >= 0)
+    {
+        /* The original complete wire response becomes visible only after the
+         * shared engine has committed and verified both UFS copies. */
+        r->completing = 1U;
+        return;
+    }
+    r->inflight = 0U;
+    r->retry_response = !strcmp(r->device_id, g_mqtt_app_device_id) && !respond(r->id, code, r->timestamp, r->sync);
+}
+
+void MQTT_V4_Task(void)
+{
+    ABoxMqttIdempotency* cache;
+    MQTT_V4_StoreTask();
+    cache = MQTT_V4_Store();
+    for (unsigned i = 0; i < CACHE_COUNT; ++i)
+    {
+        Request* r = &requests[i];
+        if (!r->inflight || r->store_slot < 0 || !cache) continue;
+        size_t index = (size_t)r->store_slot;
+        if (cache->failed || cache->entries[index].state == ABOX_IDEM_INTERRUPTED)
+        {
+            r->store_slot = -1;
+            complete(r, 5001U);
+            continue;
+        }
+        if (r->awaiting_dispatch && cache->entries[index].state == ABOX_IDEM_PREPARED)
+        {
+            ABoxClockSnapshot clock = TimeBase_GetSnapshot();
+            uint16_t code = r->cancelled || WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT ?
+                4003U : ABoxMqttIdem_TakeExecutable(cache, index, &clock);
+            r->awaiting_dispatch = 0U;
+            if (code == 200U) code = WingController_Request(r->action, r->id);
+            if (code) complete(r, code);
+        }
+        if (r->completing)
+        {
+            if (cache->entries[index].state == ABOX_IDEM_PREPARED || cache->entries[index].state == ABOX_IDEM_DISPATCHED)
+            {
+                if (encode_response(r->id, r->code, r->timestamp, 0U))
+                    (void)ABoxMqttIdem_Complete(cache, index, response_buf, strlen(response_buf));
+            }
+            const char* response = ABoxMqttIdem_Response(cache, index, NULL);
+            if (response && (strcmp(r->device_id, g_mqtt_app_device_id) || MQTT_App_QueuePublicResponse(response, r->id, r->code)))
+            { r->completing = r->inflight = r->valid = 0U; }
+        }
+    }
 }
 
 static int queue_sync(const char* id)
@@ -166,104 +213,107 @@ static int queue_sync(const char* id)
 
 void MQTT_V4_HandleRequest(const char* text)
 {
-    cJSON *root, *data, *id, *version, *command, *params, *expires;
-    uint64_t timestamp, expires_at = 0;
-    uint8_t digest[32];
-    WingAction action = WING_ACTION_NONE;
-    uint16_t code = 4001U, operation_error = 0U;
-    uint8_t sync;
-    Request* r;
+    ABoxMqttRequest request = {0};
+    const ABoxMqttOperation* operation = NULL;
+    ABoxMqttIdempotency* cache = MQTT_V4_Store();
     MqttV4Record saved;
-    int store_slot = -1, match;
-    size_t params_size = 0U;
-    if (!text || strlen(text) > 1024U) return;
-    root = ABoxMqttDigest_Parse(text, strlen(text));
-    if (!root) return;
-    data = cJSON_GetObjectItemCaseSensitive(root, "data");
-    id = cJSON_GetObjectItemCaseSensitive(data, "requestId");
-    if (!cJSON_IsString(id) || !request_id_valid(id->valuestring)) goto done;
-    version = cJSON_GetObjectItemCaseSensitive(root, "version");
-    command = cJSON_GetObjectItemCaseSensitive(data, "command");
-    params = cJSON_GetObjectItemCaseSensitive(data, "params");
-    expires = cJSON_GetObjectItemCaseSensitive(data, "expiresAt");
-    if (!cJSON_IsObject(root) || !cJSON_IsObject(data) || !cJSON_IsString(version) ||
-        strcmp(version->valuestring, MQTT_APP_PUBLIC_VERSION_STR) || !integer(cJSON_GetObjectItemCaseSensitive(root, "timestamp"), &timestamp) ||
-        !cJSON_IsString(command) || strlen(command->valuestring) > 64U ||
-        (!cJSON_IsObject(params) && !cJSON_IsNull(params)) || (expires && !integer(expires, &expires_at)) ||
-        !ABoxMqttDigest_Request(data, NULL, digest) ||
-        !ABoxMqttDigest_Canonical(params, count_bytes, &params_size)) goto error;
-    sync = !strcmp(command->valuestring, "sync_state");
-    if (!strcmp(command->valuestring, "wing_control"))
+    Request* r;
+    char key[65];
+    size_t index = 0U;
+    uint16_t code, operation_error;
+    uint8_t sync;
+    WingAction action = WING_ACTION_NONE;
+    int legacy;
+    code = ABoxMqttRequest_Decode(&request, text, text ? strlen(text) : 0U, NULL, NULL);
+    if (code != 200U) goto error;
+    operation_error = ABoxMqttRequest_Resolve(&request, operations, sizeof(operations)/sizeof(operations[0]), &operation);
+    sync = !strcmp(request.command, "sync_state");
+    if (operation)
     {
-        const cJSON* a = cJSON_GetObjectItemCaseSensitive(params, "action");
-        if (!cJSON_IsString(a)) operation_error = 4001U;
-        else if (!strcmp(a->valuestring, "ascend")) action = WING_ACTION_ASCEND;
-        else if (!strcmp(a->valuestring, "descend")) action = WING_ACTION_DESCEND;
-        else if (!strcmp(a->valuestring, "stop")) action = WING_ACTION_STOP;
-        else operation_error = 4001U;
+        if (operation->classification == ABOX_MQTT_COMMAND_SAFETY_STOP) action = WING_ACTION_STOP;
+        else if (operation->classification == ABOX_MQTT_COMMAND_DISCRETE_ACTION)
+            action = !strcmp(cJSON_GetObjectItemCaseSensitive(request.params, "action")->valuestring, "ascend") ?
+                WING_ACTION_ASCEND : WING_ACTION_DESCEND;
     }
-    else if (!sync) operation_error = 4002U;
-    r = find(id->valuestring);
-    if (r && memcmp(r->digest, digest, sizeof(digest))) { code = 4006U; goto error; }
+    r = find(request.request_id);
+    if (r && memcmp(r->digest, request.digest, sizeof(request.digest))) { code = 4006U; goto error; }
     if (r && r->inflight) goto done;
-    if (r && action != WING_ACTION_STOP)
+    if (r && r->store_slot < 0 && action != WING_ACTION_STOP)
     {
         if (sync && r->code == 200U && !queue_sync(r->id)) { code = 4003U; goto error; }
         r->retry_response = !respond(r->id, r->code, r->timestamp, r->sync);
         goto done;
     }
-    match = MQTT_V4_StoreFind(g_mqtt_app_device_id, id->valuestring, &saved, &store_slot);
-    if (match > 0)
+    /* Compatibility is read-only: the previous Flash reservations retain
+     * their original protection; every new reservation uses the shared engine. */
+    legacy = MQTT_V4_StoreFind(g_mqtt_app_device_id, request.request_id, &saved, NULL);
+    if (legacy > 0)
     {
-        if (memcmp(saved.digest, digest, sizeof(digest))) { code = 4006U; goto error; }
-        if (match == 2) (void)respond(id->valuestring, (uint16_t)saved.code, saved.timestamp, 0U);
+        if (memcmp(saved.digest, request.digest, sizeof(request.digest))) { code = 4006U; goto error; }
+        if (legacy == 2) (void)respond(request.request_id, (uint16_t)saved.code, saved.timestamp, 0U);
         else { code = 4003U; goto error; }
         goto done;
     }
-    if (match < 0 && action != WING_ACTION_STOP && !sync) { code = 5001U; goto error; }
-    if (operation_error) { code = operation_error; goto error; }
-    if (sync ? (!cJSON_IsNull(params) || expires) :
-        (action == WING_ACTION_STOP ? expires != NULL :
-            (!expires || !ABoxMqttV4_RequestLifetimeValid(timestamp, expires_at, 5000U)))) goto error;
-    if (action == WING_ACTION_ASCEND || action == WING_ACTION_DESCEND)
+    MQTT_V4_StoreKey(g_mqtt_app_device_id, request.request_id, key);
+    ABoxMqttIdemMatch match = ABoxMqttIdem_Find(cache, key, request.digest, &index);
+    if (match == ABOX_IDEM_CONFLICT) { code = 4006U; goto error; }
+    if (match == ABOX_IDEM_REPLAY)
     {
-        code = TimeBase_CheckExpiry(expires_at);
-        if (code != 200U) goto error;
+        const char* response = ABoxMqttIdem_Response(cache, index, NULL);
+        /* Release the request tree before reading response metadata. The
+         * response itself is queued byte-for-byte, without re-encoding. */
+        strcpy(key, request.request_id);
+        ABoxMqttRequest_Close(&request);
+        replay_response(response, key);
+        goto done;
     }
+    if (match == ABOX_IDEM_WAIT)
+    {
+        if (!r) { code = 4003U; goto error; }
+        goto done;
+    }
+    if (match == ABOX_IDEM_UNCERTAIN) { code = 4003U; goto error; }
+    if (operation_error != 200U) { code = operation_error; goto error; }
+    if (action != WING_ACTION_STOP && !sync && (legacy < 0 || match == ABOX_IDEM_UNAVAILABLE))
+    { code = legacy < 0 || !cache || cache->failed ? 5001U : 4003U; goto error; }
+    ABoxClockSnapshot clock = TimeBase_GetSnapshot();
+    code = ABoxMqttRequest_CheckNew(&request, operation, &clock);
+    if (code != 200U) goto error;
     if (!r) r = reserve();
     if (!r && action == WING_ACTION_STOP)
     {
-        /* Safety stop never waits for ordinary cache capacity. */
         for (unsigned i = 0; i < CACHE_COUNT; ++i)
-            if (!requests[i].inflight && !requests[i].protect_until) { r = &requests[i]; break; }
+            if (!requests[i].inflight) { r = &requests[i]; break; }
     }
     if (!r) { code = 4003U; goto error; }
     memset(r, 0, sizeof(*r));
-    strcpy(r->id, id->valuestring); memcpy(r->digest, digest, sizeof(digest));
+    strcpy(r->id, request.request_id); memcpy(r->digest, request.digest, sizeof(request.digest));
+    strcpy(r->device_id, g_mqtt_app_device_id);
     r->valid = r->inflight = 1U; r->sync = sync; r->action = action; r->store_slot = -1; r->tick = HAL_GetTick();
     if (sync) { complete(r, queue_sync(r->id) ? 200U : 4003U); goto done; }
-    if (action != WING_ACTION_STOP)
+    if (action == WING_ACTION_STOP)
+    {
+        /* A stop also cancels an intention still waiting for durable storage.
+         * It must never start later after this stop has completed. */
+        for (unsigned i = 0; i < CACHE_COUNT; ++i)
+            if (requests[i].awaiting_dispatch) requests[i].cancelled = 1U;
+        code = WingController_Request(action, r->id);
+        if (code) complete(r, code == 200U ? 5003U : code);
+    }
+    else
     {
         if (WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT)
         { complete(r, 4003U); goto done; }
-        store_slot = MQTT_V4_StoreBegin(g_mqtt_app_device_id, r->id, r->digest, expires_at);
-        if (store_slot < 0) { complete(r, store_slot == -1 ? 4003U : 5001U); goto done; }
-        r->store_slot = (int8_t)store_slot;
-        r->protect_until = ABoxMqttV4_IdempotencyProtectUntil(expires_at);
-        code = TimeBase_CheckExpiry(expires_at);
+        code = ABoxMqttIdem_Begin(cache, key, request.digest, request.expires_at, &clock, &index);
         if (code != 200U) { complete(r, code); goto done; }
-    }
-    code = WingController_Request(action, r->id);
-    if (code)
-    {
-        if (action == WING_ACTION_STOP && code == 200U) code = 5003U; /* Idle-silent has no new stop feedback. */
-        complete(r, code);
+        r->store_slot = (int8_t)index;
+        r->awaiting_dispatch = 1U;
     }
     goto done;
 error:
-    (void)respond(id->valuestring, code, TimeBase_GetMs(), 0U);
+    if (request.request_id) (void)respond(request.request_id, code, TimeBase_GetMs(), 0U);
 done:
-    cJSON_Delete(root);
+    ABoxMqttRequest_Close(&request);
 }
 
 void MQTT_V4_HandleResult(const WingControlResult* result)
@@ -300,71 +350,45 @@ void MQTT_V4_AddSnapshot(cJSON* payload, const WingSnapshot* s)
     nullable(payload, "safetyStopReason", WingSafetyReason_Name(s->safety_reason));
 }
 
-static cJSON* envelope(cJSON** data, uint32_t captured_tick)
+static uint64_t captured_time(uint32_t captured_tick)
 {
-    char ts[21];
     uint64_t timestamp = TimeBase_GetMs();
     uint32_t age = HAL_GetTick() - captured_tick;
-    timestamp = age <= INT32_MAX && timestamp >= age ? timestamp - age : 0U;
-    cJSON* root = cJSON_CreateObject();
-    *data = cJSON_CreateObject();
-    if (!root || !*data || !ABoxMqttV4_FormatInteger(ts, sizeof(ts), timestamp))
-    { cJSON_Delete(root); cJSON_Delete(*data); *data = NULL; return NULL; }
-    if (!cJSON_AddStringToObject(root, "version", MQTT_APP_PUBLIC_VERSION_STR) || !cJSON_AddRawToObject(root, "timestamp", ts) ||
-        !cJSON_AddItemToObject(root, "data", *data)) { cJSON_Delete(root); cJSON_Delete(*data); *data = NULL; return NULL; }
-    return root;
+    return age <= INT32_MAX && timestamp >= age ? timestamp - age : 0U;
 }
 
 static int encode_state(const WingSnapshot* snapshot, const char* request_id, uint8_t telemetry, uint32_t captured_tick)
 {
     char id[97];
-    cJSON *data, *root = envelope(&data, captured_tick), *payload = cJSON_CreateObject();
+    cJSON* payload = cJSON_CreateObject();
     int ok = 0;
-    if (!root || !payload) goto done;
+    if (!payload) return 0;
     if (!boot_seed) boot_seed = TimeBase_GetMs() ^ (ABox_PortGetMonotonicMs() << 16U) ^ ((uint64_t)HAL_GetUIDw0() << 32U) ^ HAL_GetUIDw1();
     snprintf(id, sizeof(id), "%08lX%08lX-%lu", (unsigned long)(boot_seed >> 32U), (unsigned long)boot_seed, (unsigned long)++report_sequence);
-    cJSON_AddStringToObject(data, "reportId", id);
-    cJSON_AddStringToObject(data, "reportType", telemetry ? "telemetry" : "state");
-    cJSON_AddStringToObject(data, "reportName", reports[telemetry ? 1U : 0U].name);
-    if (request_id && *request_id) cJSON_AddStringToObject(data, "requestId", request_id);
+    const ABoxCloudV4Report header = {.report_id = id, .type = telemetry ? "telemetry" : "state",
+        .name = reports[telemetry ? 1U : 0U].name,
+        .request_id = request_id && *request_id ? request_id : NULL, .timestamp = captured_time(captured_tick)};
     if (telemetry)
     {
         if (snapshot->have_position) cJSON_AddNumberToObject(payload, "positionMm", snapshot->position_mm); else cJSON_AddNullToObject(payload, "positionMm");
         cJSON_AddBoolToObject(payload, "statusFresh", snapshot->status_fresh);
     }
     else MQTT_V4_AddSnapshot(payload, snapshot);
-    if (cJSON_GetArraySize(payload) != (telemetry ? 2 : 10) ||
-        !cJSON_AddItemToObject(data, "payload", payload)) goto done;
-    payload = NULL;
-    if (cJSON_GetArraySize(data) != (request_id && *request_id ? 5 : 4)) goto done;
-    ok = cJSON_PrintPreallocated(root, report_buf, sizeof(report_buf), 0) && strlen(report_buf) <= 1024U;
-done:
-    cJSON_Delete(payload); cJSON_Delete(root);
+    if (cJSON_GetArraySize(payload) == (telemetry ? 2 : 10))
+        ok = ABoxCloudV4_Report(report_buf, sizeof(report_buf), &header, payload);
+    cJSON_Delete(payload);
     return ok;
 }
 
 static int publish_meta(ABoxCloudJobKind kind, uint64_t* operation)
 {
-    cJSON *data, *root = envelope(&data, HAL_GetTick());
-    int ok = 0;
-    if (!root) return 0;
-    cJSON_AddStringToObject(data, "firmware", TopFlyingWing_AppFwVersion());
-    if (kind == ABOX_CLOUD_JOB_MANIFEST)
-    {
-        cJSON* profiles = cJSON_AddArrayToObject(data, "profiles");
-        cJSON* entry = cJSON_CreateObject();
-        if (!profiles || !entry) { cJSON_Delete(entry); goto done; }
-        if (!cJSON_AddStringToObject(entry, "name", profile.name) ||
-            !cJSON_AddStringToObject(entry, "version", profile.version) ||
-            !cJSON_AddItemToArray(profiles, entry)) { cJSON_Delete(entry); goto done; }
-    }
-    if (cJSON_GetArraySize(data) != (kind == ABOX_CLOUD_JOB_MANIFEST ? 2 : 1)) goto done;
-    ok = cJSON_PrintPreallocated(root, meta_buf, sizeof(meta_buf), 0) &&
-        MQTT_Core_PublishExTracked(kind == ABOX_CLOUD_JOB_MANIFEST ? g_mqtt_app_manifest_topic : g_mqtt_app_heartbeat_topic,
-            meta_buf, kind == ABOX_CLOUD_JOB_MANIFEST ? 1U : 0U, kind == ABOX_CLOUD_JOB_MANIFEST ? 1U : 0U, operation);
+    const ABoxCloudV4Profile enabled = {profile.name, profile.version, NULL, 0U};
+    int encoded = kind == ABOX_CLOUD_JOB_MANIFEST ?
+        ABoxCloudV4_Manifest(meta_buf, sizeof(meta_buf), TimeBase_GetMs(), TopFlyingWing_AppFwVersion(), &enabled, 1U, 0) :
+        ABoxCloudV4_Heartbeat(meta_buf, sizeof(meta_buf), TimeBase_GetMs(), TopFlyingWing_AppFwVersion(), NULL);
+    int ok = encoded && MQTT_Core_PublishExTracked(kind == ABOX_CLOUD_JOB_MANIFEST ? g_mqtt_app_manifest_topic : g_mqtt_app_heartbeat_topic,
+        meta_buf, kind == ABOX_CLOUD_JOB_MANIFEST ? 1U : 0U, kind == ABOX_CLOUD_JOB_MANIFEST ? 1U : 0U, operation);
     if (ok && kind == ABOX_CLOUD_JOB_HEARTBEAT) { g_mqtt_app_last_hb_tick = HAL_GetTick(); g_mqtt_app_hb_pending = 0U; }
-done:
-    cJSON_Delete(root);
     return ok;
 }
 
@@ -466,6 +490,7 @@ void MQTT_V4_ReportTask(void)
 void MQTT_V4_TestReset(void)
 {
     memset(requests, 0, sizeof(requests));
+    bound_device_id[0] = 0;
     boot_seed = report_sequence = sample_tick = 0U;
     MQTT_V4_ResetReports();
 }

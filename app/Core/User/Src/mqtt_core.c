@@ -4,6 +4,7 @@
 #include "app_log.h"
 #include "main.h"
 #include "mqtt_runtime.h"
+#include "mqtt_v4_store.h"
 #include "time_base.h"
 #include <stdio.h>
 #include <string.h>
@@ -126,6 +127,12 @@ void MQTT_Core_SetAtCore(Ec800AtCore_t *at)
         APP_LOGE("MQTT", "public transport init failed");
         return;
     }
+    if (!ABoxMqttEc800_UseV4Backoff(&g_bridge.transport,
+        HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2() ^ HAL_GetTick()))
+    {
+        APP_LOGE("MQTT", "V4 backoff initialization failed");
+        g_bridge.initialized = 0U;
+    }
 }
 
 void MQTT_Core_Reset(void)
@@ -134,6 +141,7 @@ void MQTT_Core_Reset(void)
     /* The transport's RDY handler resets its own state once. This callback
      * only invalidates the product-facing receipt and identity caches. */
     g_modem_ready = 1U;
+    MQTT_V4_StoreOnModemReset();
     ABoxMqttReceipt_Invalidate(&g_bridge.receipt);
     ABoxMqttEc800Bridge_SetSecurityReady(&g_bridge, 0U);
     ABoxEc800Iccid_OnModemReset(&g_bridge.iccid);
@@ -147,6 +155,8 @@ uint8_t MQTT_Core_TakeModemReady(void)
 
 void MQTT_Core_TransportTask(void)
 {
+    /* Finish an already-open file before starting long reconnect commands. */
+    if (MQTT_V4_StoreBusy()) return;
     ABoxMqttEc800Bridge_Poll(&g_bridge, HAL_GetTick());
 }
 
@@ -170,6 +180,7 @@ uint8_t MQTT_Core_IsPaused(void) { return g_bridge.paused; }
 int MQTT_Core_Stop(uint32_t now_ms)
 {
     if (!g_bridge.initialized) return -1;
+    if (MQTT_V4_StoreBusy()) return 0;
     return ABoxMqttEc800_Stop(&g_bridge.transport, now_ms);
 }
 int MQTT_Core_BorrowWorkspace(void)
@@ -286,6 +297,9 @@ uint8_t MQTT_Core_PublishEx(const char *topic, const char *payload,
 uint8_t MQTT_Core_PublishExTracked(const char *topic, const char *payload,
                                   uint8_t qos, uint8_t retain, uint64_t *operation)
 {
+    /* A QMT publish can wait for 15 seconds. Keep it out of an open QF
+     * transaction; response/report owners retain their packets and retry. */
+    if (MQTT_V4_StoreBusy()) return 0U;
     return (uint8_t)ABoxMqttEc800Bridge_Publish(&g_bridge, topic, payload,
                                                  qos, retain, operation);
 }

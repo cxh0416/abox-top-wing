@@ -1,6 +1,7 @@
 #include "ota_info.h"
 
 #include <string.h>
+#include <stddef.h>
 
 #include "main.h"
 #include "mqtt_v4_store.h"
@@ -24,6 +25,7 @@ static uint8_t OTA_Info_WriteRaw(const OTA_Info_t* info)
     uint32_t addr = OTA_INFO_ADDR;
     uint32_t words = (sizeof(OTA_Info_t) + 3U) / 4U;
     uint32_t i;
+    const uint32_t marker = *(const uint32_t*)(OTA_INFO_ADDR + offsetof(OTA_Info_t, reserved));
 
     if (info == 0) return 0;
     /* Never erase protected request reservations while saving configuration. */
@@ -44,7 +46,8 @@ static uint8_t OTA_Info_WriteRaw(const OTA_Info_t* info)
 
     for (i = 0; i < words; i++)
     {
-        st = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, p[i]);
+        uint32_t word = i * sizeof(uint32_t) == offsetof(OTA_Info_t, reserved) ? marker : p[i];
+        st = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, word);
         if (st != HAL_OK)
         {
             HAL_FLASH_Lock();
@@ -54,7 +57,7 @@ static uint8_t OTA_Info_WriteRaw(const OTA_Info_t* info)
     }
 
     HAL_FLASH_Lock();
-    return 1;
+    return *(const uint32_t*)(OTA_INFO_ADDR + offsetof(OTA_Info_t, reserved)) == marker;
 }
 
 uint8_t OTA_Info_Save(const OTA_Info_t* info) { return OTA_Info_WriteRaw(info); }

@@ -8,11 +8,13 @@
 #include "boot_cfg.h"
 #include "mqtt_core.h"
 #include "mqtt_runtime.h"
+#include "mqtt_v4_store.h"
 #include "main.h"
 
 typedef struct { Ec800AtCore_t *at; ABoxBootV2AtDoneFn done; void *done_user; ABoxBootV2AtEventFn events; void *events_user; } OtaAdapter_t;
 static OtaAdapter_t g_adapter;
-static uint8_t g_ota_transfer_buffer[ABOX_BOOT_V2_APP_RAW_CHUNK]
+static uint8_t g_idem_workspace_borrowed;
+static uint8_t g_ota_transfer_buffer[MQTT_V4_IDEM_WORKSPACE_SIZE]
     __attribute__((section(".ota_work"), aligned(4)));
 static uint32_t tick(void *c){(void)c;return HAL_GetTick();}
 static void at_done(Ec800AtCmdResult_t r,void *u){OtaAdapter_t*a=u;ABoxBootV2AtDoneFn d=a->done;void*du=a->done_user;a->done=0;a->done_user=0;if(d)d((ABoxBootV2AtResult)r,du);}
@@ -40,8 +42,16 @@ void OtaService_Init(Ec800AtCore_t *at)
  p.mqtt_client_index=mqtt_client;p.mqtt_stop=mqtt_stop;p.workspace_borrow=borrow;p.workspace_return=release;
  (void)ABoxBootV2_StateBindLayout(&layout);if(!ABoxBootV2App_Init(&p,&c))APP_LOGE("OTA","initialization failed");
 }
-uint8_t OtaService_BeginProvisioning(void){return(uint8_t)ABoxBootV2App_BeginProvisioning();}void OtaService_Task(void){ABoxBootV2App_Task();}
+uint8_t* OtaService_IdemWorkspace(void) { return g_ota_transfer_buffer; }
+int OtaService_AcquireIdemWorkspace(void)
+{
+ if (g_idem_workspace_borrowed || ABoxBootV2App_IsBusy() || !g_adapter.at || g_adapter.at->quarantined) return 0;
+ g_idem_workspace_borrowed = 1U; return 1;
+}
+void OtaService_ReleaseIdemWorkspace(void) { g_idem_workspace_borrowed = 0U; }
+uint8_t OtaService_BeginProvisioning(void){return !g_idem_workspace_borrowed && (uint8_t)ABoxBootV2App_BeginProvisioning();}
+void OtaService_Task(void){if (!g_idem_workspace_borrowed) ABoxBootV2App_Task();}
 uint8_t OtaService_IsProvisioned(void){return(uint8_t)ABoxBootV2App_IsProvisioned();}uint8_t OtaService_IsReady(void){return(uint8_t)ABoxBootV2App_IsReady();}uint8_t OtaService_IsBusy(void){return(uint8_t)ABoxBootV2App_IsBusy();}
 const char*OtaService_Phase(void){return ABoxBootV2App_Phase();}const char*OtaService_TargetVersion(void){return ABoxBootV2App_TargetVersion();}uint32_t OtaService_LastError(void){return ABoxBootV2App_LastError();}
-uint8_t OtaService_Start(const OtaServiceRequest_t*r){ABoxBootV2AppRequest c;if(!r)return 0U;memcpy(&c,r,sizeof(c));return(uint8_t)ABoxBootV2App_Start(&c);}
+uint8_t OtaService_Start(const OtaServiceRequest_t*r){ABoxBootV2AppRequest c;if(!r || g_idem_workspace_borrowed)return 0U;memcpy(&c,r,sizeof(c));return(uint8_t)ABoxBootV2App_Start(&c);}
 uint8_t OtaService_TakeInstallReady(void){return(uint8_t)ABoxBootV2App_TakeInstallReady();}uint8_t OtaService_TakeFailure(uint32_t*e){return(uint8_t)ABoxBootV2App_TakeFailure(e);}void OtaService_AcknowledgeRollback(void){(void)ABoxBootV2_AcknowledgeRollback();}

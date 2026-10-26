@@ -37,6 +37,7 @@ void MQTT_Core_SetTopics(const char* const* topics,uint8_t count,const char* hea
 void WingController_Task(uint32_t now) { (void)now; }
 uint8_t MQTT_V4_ValidDeviceId(const char* id) { return id && *id && strlen(id)<=32U; }
 void MQTT_V4_IdentityChanged(const char* id) { (void)id; }
+void MQTT_V4_Task(void) {}
 void TimeSync_Init(const char* id) { (void)id; }
 void TimeSync_Task(void) {}
 int TimeSync_OnMessage(const char* topic,const char* payload) { (void)topic;(void)payload;return 0; }

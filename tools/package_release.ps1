@@ -2,7 +2,7 @@
 param(
     [string]$BootPath = "",
     [string]$AppPath = "",
-    [string]$FirmwareVersion = "top-flying-wing-1.1.4",
+    [string]$FirmwareVersion = "top-flying-wing-1.1.5",
     [string]$BootVersion = "abox-boot-2.3.0"
 )
 
@@ -102,9 +102,10 @@ try {
             (Get-Artifact $fullOut 'TopFlyingWing_Full.bin' '0x08000000')
         )
     }
-    $manifest | ConvertTo-Json -Depth 6 |
-        Set-Content -LiteralPath (Join-Path $stagingDirectory 'manifest.json') -Encoding UTF8
-    [ordered]@{
+    $manifestJson = ($manifest | ConvertTo-Json -Depth 6) -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText((Join-Path $stagingDirectory 'manifest.json'),
+        $manifestJson + "`n", [System.Text.UTF8Encoding]::new($false))
+    $releaseManifest = [ordered]@{
         schema_version = 1
         product = 'top_flying_wing'
         version = $FirmwareVersion
@@ -116,8 +117,10 @@ try {
         size = $manifest.artifacts[0].size
         crc32 = $manifest.artifacts[0].crc32
         sha256 = $manifest.artifacts[0].sha256
-    } | ConvertTo-Json |
-        Set-Content -LiteralPath (Join-Path $stagingDirectory 'release.manifest.json') -Encoding UTF8
+    }
+    $releaseJson = ($releaseManifest | ConvertTo-Json) -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText((Join-Path $stagingDirectory 'release.manifest.json'),
+        $releaseJson + "`n", [System.Text.UTF8Encoding]::new($false))
 
     $expectedNames = @(
         'ABox_Boot.bin',

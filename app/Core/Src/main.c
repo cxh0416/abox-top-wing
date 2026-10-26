@@ -146,15 +146,24 @@ static void Ec800RxSink(void *context, const uint8_t *data, uint16_t length)
 
 static void Ec800RxService(void)
 {
+    if (g_modem_restarting && EC_Power_IsOnDone())
+        ABoxEc800Rx_RequestRestart(&g_ec800_rx);
     (void)ABoxEc800Rx_Drain(&g_ec800_rx, Ec800RxSink, &g_ec800_at, 0U);
     EC800_AT_SetRxOverflowCount(&g_ec800_at,
                                 ABoxEc800Rx_OverflowCount(&g_ec800_rx));
     if (ABoxEc800Rx_TakeRestartRequest(&g_ec800_rx))
     {
         ABoxEc800At_AbortAll(&g_ec800_at, ABOX_EC800_RESULT_ERROR);
-        (void)HAL_UART_AbortReceive(&huart1);
+        if (HAL_UART_AbortReceive(&huart1) != HAL_OK) return;
         ABoxEc800Rx_AfterRestart(&g_ec800_rx);
-        (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SZ);
+        if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SZ) != HAL_OK)
+            return;
+        /* AbortAll quarantines AT: release it only after physical reset and RX rearm. */
+        if (g_modem_restarting && EC_Power_IsOnDone())
+        {
+            g_modem_restarting = 0U;
+            ABoxEc800At_OnModemReset(&g_ec800_at);
+        }
     }
 }
 /* USER CODE END 0 */
@@ -246,12 +255,6 @@ int main(void)
     {
         uint32_t now = HAL_GetTick();
         EC_Power_Task();
-        if (g_modem_restarting && EC_Power_IsOnDone())
-        {
-            g_modem_restarting = 0U;
-            ABoxEc800Rx_RequestRestart(&g_ec800_rx);
-            ABoxEc800At_OnModemReset(&g_ec800_at);
-        }
         Ec800RxService();
 
         if ((!g_mqtt_start_enable) && ((HAL_GetTick() - g_ec_restart_tick) >= 8000U))

@@ -46,6 +46,7 @@ target_compile_options(test_platform_monotonic PRIVATE -UNDEBUG)
 add_test(NAME test_platform_monotonic COMMAND test_platform_monotonic)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME modem_rx_recovery COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_modem_rx_recovery.py ${CMAKE_C_COMPILER})
 add_test(NAME public_protocol COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_public_protocol_contract.py)
 add_test(NAME boot_contract COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_boot_v2_contract.py)
 add_test(NAME mqtt_v4_vectors COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../platform/tools/validate_mqtt_v4.py)

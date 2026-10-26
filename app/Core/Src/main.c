@@ -46,7 +46,7 @@
 #include "mqtt_runtime.h"
 #include "wing_enrollment.h"
 #include "abox_stm32_monotonic.h"
-#include "abox_ec800_recovery.h"
+#include "wing_app_service.h"
 #include "wing_controller.h"
 /* USER CODE END Includes */
 
@@ -76,9 +76,6 @@ static uint8_t uart1_rx_buf[UART1_RX_BUF_SZ];
 static uint8_t g_uart1_rx_ring[UART1_RX_RING_SZ];
 static ABoxEc800Rx g_ec800_rx;
 
-static uint8_t g_mqtt_start_enable = 0;
-static uint32_t g_ec_restart_tick = 0;
-static uint32_t g_ec800_rx_overflow_reported = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -95,9 +92,6 @@ int fputc(int ch, FILE* f)
     (void)f;
     return ch;
 }
-
-static ABoxEc800Recovery g_modem_recovery;
-static uint8_t g_modem_restarting;
 
 const char g_top_flying_wing_fw_version_marker[] = TOP_FLYING_WING_APP_FW_VERSION_MARKER;
 
@@ -139,33 +133,6 @@ static int Ec800Write(void *context, const uint8_t *data, uint16_t length,
                              length, timeout_ms) == HAL_OK;
 }
 
-static void Ec800RxSink(void *context, const uint8_t *data, uint16_t length)
-{
-    EC800_AT_FeedRx((Ec800AtCore_t *)context, data, length);
-}
-
-static void Ec800RxService(void)
-{
-    if (g_modem_restarting && EC_Power_IsOnDone())
-        ABoxEc800Rx_RequestRestart(&g_ec800_rx);
-    (void)ABoxEc800Rx_Drain(&g_ec800_rx, Ec800RxSink, &g_ec800_at, 0U);
-    EC800_AT_SetRxOverflowCount(&g_ec800_at,
-                                ABoxEc800Rx_OverflowCount(&g_ec800_rx));
-    if (ABoxEc800Rx_TakeRestartRequest(&g_ec800_rx))
-    {
-        ABoxEc800At_AbortAll(&g_ec800_at, ABOX_EC800_RESULT_ERROR);
-        if (HAL_UART_AbortReceive(&huart1) != HAL_OK) return;
-        ABoxEc800Rx_AfterRestart(&g_ec800_rx);
-        if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SZ) != HAL_OK)
-            return;
-        /* AbortAll quarantines AT: release it only after physical reset and RX rearm. */
-        if (g_modem_restarting && EC_Power_IsOnDone())
-        {
-            g_modem_restarting = 0U;
-            ABoxEc800At_OnModemReset(&g_ec800_at);
-        }
-    }
-}
 /* USER CODE END 0 */
 
 /**
@@ -209,7 +176,6 @@ int main(void)
 
     ABoxStm32Monotonic_Init();
     ABox_ProductPlatform_Init();
-    ABoxEc800Recovery_Init(&g_modem_recovery, 30000U);
 
     AppLog_Init();
     TimeBase_Init();
@@ -219,14 +185,11 @@ int main(void)
 
     EC_Power_Init();
     EC_Power_StartRestartSequence();
-    g_ec_restart_tick = HAL_GetTick();
-    g_mqtt_start_enable = 0;
 
     APP_LOGI("EC", "restart sequence");
 
-    (void)ABoxEc800Rx_Init(&g_ec800_rx, uart1_rx_buf, UART1_RX_BUF_SZ,
-                           g_uart1_rx_ring, UART1_RX_RING_SZ);
-    (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SZ);
+    int communication_ok = ABoxEc800Rx_Init(&g_ec800_rx, uart1_rx_buf, UART1_RX_BUF_SZ,
+                                           g_uart1_rx_ring, UART1_RX_RING_SZ);
 
     BoardConfig_Load();
     AppLog_SetLevel((AppLogLevel_t)BoardConfig_Get()->diag_log_level);
@@ -236,7 +199,7 @@ int main(void)
 
     {
         const ABoxEc800AtPort at_port = {&huart1, Ec800Tick, Ec800Write, 0};
-        (void)EC800_AT_Init(&g_ec800_at, &at_port);
+        communication_ok = EC800_AT_Init(&g_ec800_at, &at_port) && communication_ok;
     }
     MQTT_Core_SetAtCore(&g_ec800_at);
     MQTT_Core_Init(&g_mqtt_cfg, MQTT_App_OnMessage);
@@ -245,7 +208,10 @@ int main(void)
     if (!WingEnrollment_Init(&g_ec800_at)) APP_LOGE("ENROLL", "initialization failed");
     MQTT_App_Init(WingEnrollment_DeviceId());
     MQTT_Core_SetTopics(MQTT_App_GetSubTopics(), MQTT_App_GetSubTopicCount(), MQTT_App_GetHeartbeatTopic());
-    if (!MqttRuntime_Init()) APP_LOGE("MQTT", "runtime not initialized");
+    communication_ok = MqttRuntime_Init() && communication_ok;
+    communication_ok = communication_ok && WingAppService_Init(&g_ec800_at, &g_ec800_rx);
+    if (!communication_ok)
+        APP_LOGE("APP", "communication initialization failed");
 
   /* USER CODE END 2 */
 
@@ -253,42 +219,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
     while (1)
     {
-        uint32_t now = HAL_GetTick();
-        EC_Power_Task();
-        Ec800RxService();
-
-        if ((!g_mqtt_start_enable) && ((HAL_GetTick() - g_ec_restart_tick) >= 8000U))
-        {
-            g_mqtt_start_enable = 1;
-            (void)OtaService_BeginProvisioning();
-            // HAL_UART_Transmit(&huart5, (uint8_t*)"[APP] mqtt start enable\r\n", 25, 1000);
-        }
-
-        if (g_mqtt_start_enable)
-        {
-            EC800_AT_Task(&g_ec800_at);
-            if (ABoxEc800Rx_OverflowCount(&g_ec800_rx) != g_ec800_rx_overflow_reported)
-            {
-                g_ec800_rx_overflow_reported = ABoxEc800Rx_OverflowCount(&g_ec800_rx);
-                APP_LOGE("AT", "USART1 deferred RX overflow=%lu",
-                         (unsigned long)g_ec800_rx_overflow_reported);
-            }
-            OtaService_Task();
-            MQTT_Core_Task();
-            WingEnrollment_Task();
-            MQTT_App_Task();
-            if (ABoxEc800Recovery_Poll(&g_modem_recovery, now,
-                g_ec800_at.quarantined || MqttRuntime_NeedsModemRecovery(),
-                EC_Power_IsOnDone() && !OtaService_IsBusy()))
-            {
-                MQTT_Core_SetPaused(1U);
-                ABoxEc800At_AbortAll(&g_ec800_at, ABOX_EC800_RESULT_ERROR);
-                EC_Power_StartRestartSequence();
-                g_modem_restarting = 1U;
-            }
-        }
-
-        (void)now;
+        WingAppService_Poll(HAL_GetTick());
+        if (!communication_ok) WingController_Task(HAL_GetTick());
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

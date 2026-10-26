@@ -1,6 +1,6 @@
 # A-BOX 顶飞翼固件
 
-产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，当前构建基线为 `top-flying-wing-1.1.5`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
+产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，当前构建基线为 `top-flying-wing-1.1.6`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
 
 公共组件、完整 Boot 边界和其他产品迁移状态见 `platform/README.md`、`platform/docs/PLATFORM_CONTRACT.md`、`platform/docs/PRODUCT_MATRIX.md`。
 
@@ -49,10 +49,12 @@ powershell -ExecutionPolicy Bypass -File .\tools\test_v4.ps1 -ServiceRoot F:\wor
 python .\tools\test_boot_v2_contract.py
 ```
 
-上述脚本默认构建 `top-flying-wing-1.1.5`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。打包先生成完整临时制品，成功后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
+上述脚本默认构建 `top-flying-wing-1.1.6`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。打包先生成完整临时制品，成功后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
 
 App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。Full 只拼接到 App 实际末尾，不包含配置页和 Boot State。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
 
 `test_v4.ps1` 使用平台统一预检，检查公共/产品回归以及实际固件报文、入网合同与服务端源码的兼容性。无保留要求的测试板必须使用公共整片擦除入口，从全空 MCU 配置开始入网验收；操作及存储边界见[平台内部接入流程](platform/docs/internal/new_product_onboarding.md#v4-统一预检与空板基线)。保留配置的升级、重启恢复另行验证。
+
+通信主循环由公共 `ABoxAppService` 统一驱动，`wing_app_service.c` 仅绑定 UART、产品轮询和工作区准入，不另写模组恢复流程。`test_wing_app_service` 编译真实薄适配与公共入口，验证 UART 失败、物理复位通知、幂等工作区保护及轮询顺序；它作为统一预检的 `LifecycleTest`，与协议报文、身份合同一起检查。
 
 本地构建和主机测试不代表 CAN 线束、终端电阻、电机、本地触摸、Boot 跳转或真实 OTA 已通过实物验收。

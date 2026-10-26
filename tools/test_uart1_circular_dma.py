@@ -4,6 +4,7 @@ from pathlib import Path
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     main_source = (root / "app/Core/Src/main.c").read_text(encoding="utf-8")
+    owner_source = (root / "app/Core/User/Src/wing_app_service.c").read_text(encoding="utf-8")
     uart_source = (root / "app/Core/Src/usart.c").read_text(encoding="utf-8")
     ioc = (root / "app/TopFlyingWing_App.ioc").read_text(encoding="utf-8")
     cmake = (root / "app/CMakeLists.txt").read_text(encoding="utf-8")
@@ -15,10 +16,12 @@ def main() -> None:
     assert "#define UART1_RX_BUF_SZ 1088U" in main_source
     assert "#define UART1_RX_RING_SZ 1152U" in main_source
     assert "ABoxEc800Rx_OnDmaEvent(&g_ec800_rx, Size)" in main_source
-    assert "ABoxEc800Rx_Drain(&g_ec800_rx" in main_source
-    assert "ABoxEc800At_AbortAll(&g_ec800_at, ABOX_EC800_RESULT_ERROR)" in main_source
-    assert "EC800_AT_SetRxOverflowCount" in main_source
-    assert "ABoxEc800Rx_AfterRestart(&g_ec800_rx)" in main_source
+    assert "WingAppService_Poll(HAL_GetTick())" in main_source
+    assert "ABoxAppService_Poll(&service, now)" in owner_source
+    assert "ABoxEc800Rx_AfterRestart(service.rx)" in owner_source
+    assert "abox::app_service" in cmake
+    assert "ABoxEc800At_OnModemReset" not in main_source
+    assert "ABoxEc800Recovery_Poll" not in main_source
     assert "ABOX_EC800_RX_DMA_MIN 1088U" in rx_header
     assert "ABOX_EC800_RX_RING_MIN 1152U" in rx_header
     assert "ABOX_EC800_AT_RAW_MAX 1024U" in at_header

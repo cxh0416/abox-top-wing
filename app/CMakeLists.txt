@@ -36,7 +36,7 @@ set(TOP_WING_CAN_BUS "2" CACHE STRING "Top flying wing CAN port (1 or 2)")
 if(NOT TOP_WING_CAN_BUS MATCHES "^[12]$")
     message(FATAL_ERROR "TOP_WING_CAN_BUS must be 1 or 2")
 endif()
-set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.5" CACHE STRING "Top flying wing App firmware version")
+set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.6" CACHE STRING "Top flying wing App firmware version")
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
@@ -69,6 +69,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/User/Src/mqtt_runtime.c
     Core/User/Src/time_sync.c
     Core/User/Src/wing_enrollment.c
+    Core/User/Src/wing_app_service.c
     "${CMAKE_SOURCE_DIR}/../platform/targets/stm32f105_ec800_v1/enrollment_identity_stm32f105.c"
     Core/User/Src/mqtt_core.c
     Core/User/Src/ota_info.c
@@ -100,6 +101,7 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
     abox::ec800
+    abox::app_service
     abox::mqtt_digest
     abox::mqtt_runtime
     abox::mqtt_ec800

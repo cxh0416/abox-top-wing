@@ -24,6 +24,7 @@ wing_test(test_mqtt_v4 test_mqtt_v4.c ${USER}/Src/mqtt_v4.c ${USER}/Src/mqtt_v4_
     ${USER}/Src/wing_controller.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)
 wing_test(test_time_sync test_time_sync.c ${USER}/Src/time_base.c ${USER}/Src/time_sync.c)
 wing_test(test_mqtt_trial test_mqtt_trial.c ${USER}/Src/mqtt_app.c)
+target_link_libraries(test_mqtt_trial PRIVATE abox::maintenance_service)
 wing_test(test_mqtt_runtime test_mqtt_runtime.c ${USER}/Src/mqtt_runtime.c)
 wing_test(test_mqtt_runtime_platform test_mqtt_runtime_platform.c ${USER}/Src/mqtt_runtime.c)
 wing_test(test_wing_enrollment test_wing_enrollment.c ${USER}/Src/wing_enrollment.c)

@@ -106,7 +106,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 | `get_log` | 读取最近的内存日志快照 | 已接入 |
 | `clear_log` | 清空设备内存日志 | 固件支持，平台当前不提供按钮 |
 | `reboot` | 响应发布成功后受控重启 | 已接入，需二次确认 |
-| `set_mqtt` | 试用并保存新的 VID/MQTT 配置 | 由平台“修改 VID”流程受控调用 |
+| `set_mqtt` | 试用并保存新的 TLS MQTT 配置 | 使用公共受控事务；普通切换保持 VID，独立 VID 变更入口可迁移身份 |
 
 ### 3.1 查询设备信息
 
@@ -153,25 +153,24 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
       "otaPhase": "IDLE",
       "otaReady": true,
       "otaBusy": false,
-      "mqttHost": "36.153.162.171",
-      "mqttPort": 19683,
-      "tlsEnabled": false,
-      "tlsActive": false,
+      "mqttHost": "zxwl.ntiov.com",
+      "mqttPort": 19688,
+      "mqttTls": true,
+      "mqttTlsActive": true,
+      "mqttTlsProfileId": 0,
+      "mqttAuthMode": "ca",
+      "maintenanceProtocols": {"mqttConfigTransaction": 1, "vidChangeTransaction": 1},
       "trustedTime": false,
       "canBus": 2,
       "canBitrate": 500000,
       "feedbackTimeoutMs": 500,
-      "canSessionMode": "remote_only_idle_silent",
-      "queryTimeoutMs": 300,
-      "preflightQuietMs": 250,
-      "commandTimeoutMs": 1000,
-      "maxRuntimeMs": 120000
+      "canSessionMode": "remote_only_idle_silent"
     }
   }
 }
 ```
 
-`bootVersion` 只有在 Boot descriptor 校验有效时可信；平台应结合 `bootDescriptorValid` 判断。`stableSeedSource=local_flash` 表示稳定槽从当前运行 App 的本地 Flash 初始化，不依赖平台先发布一个引导 revision；因此 `otaBootstrapNeedsRevision` 固定为 `false`。`canSessionMode=remote_only_idle_silent` 表示完全空闲时不发送控制器查询，`queryTimeoutMs` 和 `preflightQuietMs` 分别给出单次预检查询超时与两次 `RD` 之间的静默时间。`tlsEnabled` 表示已保存的 TLS 开关，`tlsActive` 表示当前 runtime 已就绪并启用 TLS，`trustedTime` 表示公共时钟处于可信同步质量；三者不互相替代。响应不返回 MQTT 用户名、密码或 OTA CA 内容。
+`bootVersion` 只有在 Boot descriptor 校验有效时可信；平台应结合 `bootDescriptorValid` 判断。`stableSeedSource=local_flash` 表示稳定槽从当前运行 App 的本地 Flash 初始化，不依赖平台先发布一个引导 revision；因此 `otaBootstrapNeedsRevision` 固定为 `false`。`canSessionMode=remote_only_idle_silent` 表示完全空闲时不发送控制器查询。`mqttTls` 表示已保存的 TLS 配置，`mqttTlsActive` 表示当前 runtime 已就绪并启用 TLS，`trustedTime` 表示公共时钟处于可信同步质量；三者不互相替代。响应不返回 MQTT 用户名、密码或 OTA CA 内容。
 
 `otaPhase` 使用大写状态字符串，当前可能为 `IDLE`、`SEEDING_LOCAL`、`WAIT_MODEM`、`RETRY_WAIT`、`PROVISIONING`、`DOWNLOADING`、`VERIFYING`、`ERROR`，以及公共 HTTPS/UFS 下载器返回的细分阶段。平台不得按旧示例使用小写 `idle` 判断状态。
 
@@ -217,7 +216,7 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
 
 `params.action=reboot`。设备先排队发布 `code=200` 的 QoS 1 响应，确认响应发布完成后延迟约 200 ms 重启；极端情况下最迟约 15 秒强制重启。`200` 表示设备已接受重启，不表示重启后的心跳已经恢复，平台仍需等待新的心跳。
 
-### 3.5 修改 VID/MQTT 配置
+### 3.5 受控修改 TLS MQTT 配置
 
 ```json
 {
@@ -228,28 +227,25 @@ A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于
     "command": "internal_config",
     "params": {
       "action": "set_mqtt",
-      "vid": "TFW000002",
-      "host": "36.153.162.171",
-      "port": 19683,
+      "vid": "TFW000001",
+      "host": "zxwl.ntiov.com",
+      "port": 19688,
       "username": "configured-by-platform",
       "password": "configured-by-platform",
-      "tlsEnabled": false
+      "tlsEnabled": true,
+      "tlsProfileId": 0
     }
   }
 }
 ```
 
-未提供的配置项沿用设备当前值。设备先通过旧连接返回 `202`，确认该响应发布成功后才切换到新配置进行最长 60 秒的连接试用：
+当前连接和候选连接均须使用 TLS；身份保持不变。候选试运行最长 60 秒，恢复旧连接最长 90 秒。确认接受响应已发布后才试连；完成订阅、关联心跳以及配置持久化读回后才报告成功。保存失败时尝试持久恢复旧配置；无法确认恢复时阻止新的配置事务。
 
-1. 新连接完成一次心跳发布确认后，设备把新配置写入 Flash；Manifest 或其他报文的发布确认不能代替心跳。
-2. 60 秒内未取得新连接心跳确认，或保存失败时，设备恢复原配置并重新连接。TLS 准备阶段也按公共停止/清理流程收口。
-3. 修改 VID 后，后续 Topic 使用新 VID；平台必须等待新 VID 心跳，不能仅凭 `202` 删除旧设备身份。
-
-`tlsEnabled` 为可选 Boolean，省略时沿用当前值。开启 TLS 时必须同时配置运维提供的可信域名和 TLS 监听端口；不能把旧明文监听端口直接当成 TLS 端口。设备继续使用每设备凭据及 Broker ACL，不自动改写已保存的连接参数。
+`tlsEnabled` 必须为 `true`，`tlsProfileId` 必须为整数 `0`，其余候选字段均必填。普通 MQTT 参数切换使用当前 VID；平台独立 VID 变更入口完成身份预留和逐设备 ACL 调整后，可提交新 VID。候选使用可信域名和实际 TLS 监听端口，保持已有认证模式与逐设备凭据。事务与终态以[公共 V4 运维合同](../../platform/docs/internal/v4_common_maintenance.md)为准：先返回 `202 MQTT_CANDIDATE_TESTING`，完成订阅、心跳证明及持久化读回后返回 `200 MQTT_CONFIG_SAVED`，恢复旧 TLS 连接后返回 `500 MQTT_CANDIDATE_RESTORED`。响应丢失时平台只读核对。
 
 升降控制未空闲或持久请求记录仍在保护期时，配置修改返回 `4003`，不会先断开连接。响应未确认时也不切换配置。
 
-用户名和密码属于敏感配置，不得写入日志、审计详情或普通业务文档。平台界面的“修改 VID”只传递新的 VID，其余 Broker 参数由服务器已安装配置补齐。
+用户名和密码属于敏感配置，不得写入日志、审计详情或普通业务文档。平台 MQTT 参数由服务端已安装 TLS 目标及该设备托管凭据补齐；更改 VID 必须使用独立 VID 变更入口，不能把普通 MQTT 参数切换作为身份迁移入口。
 
 ## 4. 增量运行日志
 

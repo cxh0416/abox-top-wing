@@ -46,7 +46,7 @@ uint8_t MQTT_App_GetSubTopicCount(void) { return 1; }
 const char* MQTT_App_GetHeartbeatTopic(void) { return "test/hb"; }
 void MQTT_Core_SetTopics(const char* const* topics,uint8_t count,const char* hb) { (void)topics;assert(count==1 && hb); }
 uint8_t MqttRuntime_ApplyEndpoint(const char* host,uint16_t port,const char* user,const char* password,uint8_t tls)
-{ assert(host && port && user && password && !tls);++applied;return 1; }
+{ assert(host && port && user && password && tls);++applied;return 1; }
 int MqttRuntime_ClearEnrollmentCandidate(void) { ++clears;connected=subscribed=0;return 1; }
 uint8_t MQTT_Core_IsConnected(void) { return connected; }
 uint8_t MQTT_Core_IsReady(void) { return subscribed; }
@@ -61,7 +61,7 @@ static void boot(void)
 static void approve(void)
 {
     ABoxEnrollmentService* s=WingEnrollment_TestService();
-    const char* packet="{\"status\":\"approved\",\"vid\":\"TFW-APPROVED\",\"mqtt\":{\"host\":\"broker.example\",\"port\":1883,\"username\":\"abox_user\",\"password\":\"demo-enroll-secret\",\"tlsEnabled\":false}}";
+    const char* packet="{\"status\":\"approved\",\"vid\":\"TFW-APPROVED\",\"mqtt\":{\"host\":\"broker.example\",\"port\":19688,\"username\":\"abox_user\",\"password\":\"demo-enroll-secret\",\"tlsEnabled\":true,\"tlsProfileId\":\"0\"}}";
     strcpy(s->enrollment.buffers.response,packet);s->enrollment.state=ABOX_ENROLLMENT_HTTP;s->enrollment.have_request=1;
     ABoxEnrollment_OnHttp(&s->enrollment,200,strlen(packet),1,tick);
     assert(s->enrollment.state==ABOX_ENROLLMENT_TRIAL);

@@ -40,6 +40,9 @@ void MQTT_App_PromoteQueuedResponse(void);
 uint8_t MQTT_App_DropStalePendingResponse(uint32_t now, uint32_t stale_ms);
 uint8_t MQTT_App_ScheduleMqttConfigTrial(const char* request_id, const char* vid, const char* host, uint16_t port,
                                          const char* username, const char* password, uint8_t tls_enabled);
+uint16_t MQTT_App_MqttTrialReply(const char* id,const char* vid,const char* host,
+    uint16_t port,const char* user,const char* password);
+uint8_t MQTT_App_QueueMqttTrialResponse(const char* request_id, uint16_t code);
 void MQTT_App_ResponseConfirmed(const char* request_id, uint16_t code);
 void MQTT_App_HandleCommandMessage(const char* topic, const char* payload);
 void MQTT_App_HandleWingResultTask(void);

@@ -2,7 +2,7 @@
 param(
     [string]$BootPath = "",
     [string]$AppPath = "",
-    [string]$FirmwareVersion = "top-flying-wing-1.1.6",
+    [string]$FirmwareVersion = "top-flying-wing-1.1.7",
     [string]$BootVersion = "abox-boot-2.3.0"
 )
 

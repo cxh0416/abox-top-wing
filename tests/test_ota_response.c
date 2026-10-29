@@ -15,6 +15,8 @@
 #include "wing_controller.h"
 
 static uint32_t fake_tick;
+static BoardConfigStore_t info_config;
+static uint8_t maximal_info;
 static uint8_t mqtt_ready;
 static uint8_t ota_ready = 1U;
 static uint8_t ota_busy;
@@ -50,11 +52,13 @@ volatile uint8_t g_mqtt_app_ota_reset_pending;
 uint32_t g_mqtt_app_ota_reset_tick;
 uint32_t g_mqtt_app_ota_request_tick;
 
+void MQTT_App_TestHandleConfig(const char* request_id, cJSON* params);
 void MQTT_App_TestHandleOta(const char* request_id, cJSON* params);
 uint8_t MQTT_App_TestOtaRequestState(void);
 void MQTT_App_HandleCommandMessage(const char* topic, const char* payload);
 
 uint32_t HAL_GetTick(void) { return fake_tick; }
+uint8_t MQTT_App_IsMqttConfigTrialActive(void) { return 0U; }
 uint8_t MQTT_Core_IsReady(void) { return mqtt_ready; }
 uint8_t OtaService_IsReady(void) { return ota_ready; }
 uint8_t OtaService_IsBusy(void) { return ota_busy; }
@@ -78,7 +82,7 @@ uint8_t OtaService_TakeFailure(uint32_t* error)
 
 uint8_t TimeBase_FormatUtcMs(char* out, uint16_t out_sz)
 {
-    return (uint8_t)(snprintf(out, out_sz, "0") > 0);
+    return (uint8_t)(snprintf(out, out_sz, "%s", maximal_info ? "1793251713000" : "0") > 0);
 }
 void AppLog_Printf(AppLogLevel_t level, const char* tag, const char* fmt, ...)
 {
@@ -92,15 +96,17 @@ uint16_t AppLog_Dump(char* out, uint16_t out_sz)
 }
 const BoardConfigStore_t* BoardConfig_Get(void)
 {
-    static BoardConfigStore_t config;
-    return &config;
+    return &info_config;
 }
 uint8_t BootState_Load(BootStateRecord_t* state) { (void)state; return 0U; }
-int ABoxBootV2_DescriptorRead(ABoxBootV2Descriptor* descriptor) { (void)descriptor; return 0; }
-int ABoxBootV2_DescriptorValid(const ABoxBootV2Descriptor* descriptor) { (void)descriptor; return 0; }
-const char* ABoxBootV2App_StableSeedSource(void) { return "none"; }
+int ABoxBootV2_DescriptorRead(ABoxBootV2Descriptor* descriptor) { if (maximal_info) { memset(descriptor,0,sizeof(*descriptor)); memset(descriptor->build_version,'b',sizeof(descriptor->build_version)-1); return 1; } return 0; }
+int ABoxBootV2_DescriptorValid(const ABoxBootV2Descriptor* descriptor) { (void)descriptor; return maximal_info; }
+const char* ABoxBootV2App_StableSeedSource(void) { return maximal_info ? "immutable_revision" : "none"; }
 const char* TopFlyingWing_AppFwVersion(void) { return "top-flying-wing-1.0.9"; }
 const char* OtaService_Phase(void) { return "IDLE"; }
+uint16_t MQTT_App_MqttTrialReply(const char* id,const char* vid,const char* host,
+    uint16_t port,const char* user,const char* password)
+{ (void)id;(void)vid;(void)host;(void)port;(void)user;(void)password;return 0U; }
 uint8_t MQTT_App_ScheduleMqttConfigTrial(const char* request_id, const char* vid, const char* host, uint16_t port,
                                          const char* username, const char* password, uint8_t tls_enabled)
 {
@@ -159,6 +165,22 @@ static int response_code(void)
 
 int main(void)
 {
+    MQTT_App_ResetResponseState();
+    cJSON* info_params=cJSON_CreateObject(); cJSON_AddStringToObject(info_params,"action","get_info");
+    char long_request[65]; memset(long_request,'r',64); long_request[64]=0;
+    memset(info_config.vid,'V',sizeof(info_config.vid)-1);
+    memset(info_config.mqtt_host,'a',sizeof(info_config.mqtt_host)-1);
+    info_config.mqtt_port=65535;
+    maximal_info=1;
+    MQTT_App_TestHandleConfig(long_request,info_params); cJSON_Delete(info_params);
+    printf("get_info length=%u code=%u\n",(unsigned)strlen(g_mqtt_app_resp_payload),(unsigned)g_mqtt_app_resp_code);
+    assert(response_code()==200U);
+    cJSON* info_root=cJSON_Parse(g_mqtt_app_resp_payload);
+    cJSON* info=cJSON_GetObjectItem(cJSON_GetObjectItem(info_root,"data"),"result");
+    assert(cJSON_IsBool(cJSON_GetObjectItem(info,"mqttTlsActive")));
+    assert(cJSON_GetObjectItem(cJSON_GetObjectItem(info,"maintenanceProtocols"),"mqttConfigTransaction")->valueint==1);
+    cJSON_Delete(info_root); maximal_info=0;
+
     cJSON* params;
 
     MQTT_App_ResetResponseState();

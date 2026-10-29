@@ -29,6 +29,7 @@ void MQTT_Core_Task(void) { record('M'); }
 void WingEnrollment_Task(void) { record('E'); }
 void MQTT_App_Task(void) { record('C'); }
 uint8_t MqttRuntime_NeedsModemRecovery(void) { return 0; }
+uint8_t MQTT_App_IsMqttConfigTrialActive(void) { return 0U; }
 uint8_t MQTT_V4_StoreBusy(void) { return store_busy; }
 void MQTT_Core_SetPaused(uint8_t p) { assert(p==1); }
 static uint32_t tick(void *c) { (void)c; return now; }

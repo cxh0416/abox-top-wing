@@ -49,7 +49,7 @@ static void cloud(void *context, uint32_t now)
 static int transport_error(void *context)
 { (void)context; return MqttRuntime_NeedsModemRecovery(); }
 static int maintenance_busy(void *context)
-{ (void)context; return MQTT_V4_StoreBusy(); }
+{ (void)context; return MQTT_V4_StoreBusy() || MQTT_App_IsMqttConfigTrialActive(); }
 static void event(void *context, ABoxAppServiceEvent value)
 {
     (void)context;

@@ -32,7 +32,7 @@ int MQTT_Core_Stop(uint32_t now) { (void)now;return 1; }
 uint8_t MQTT_Core_IsReady(void) { return 1U; }
 uint8_t MQTT_Core_IsConnected(void) { return 1U; }
 
-void ABoxMqttRuntimeOptions_StandardEc800(ABoxMqttRuntimeOptions* options,uint32_t owner,uint8_t profile)
+void ABoxMqttRuntimeOptions_V4Ec800(ABoxMqttRuntimeOptions* options,uint32_t owner,uint8_t profile)
 { memset(options,0,sizeof(*options));options->owner=owner;options->tls_profile_id=profile; }
 int ABoxMqttRuntime_Init(ABoxMqttRuntime* runtime,ABoxEc800At* at,const ABoxMqttRuntimePort* port,
     const ABoxMqttRuntimeOptions* options,const ABoxMqttConfig* config,uint32_t now)

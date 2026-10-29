@@ -61,7 +61,7 @@ static void reach(ABoxMqttRuntimeState state)
 int main(void)
 {
     ABoxEc800AtPort port={0};port.tick_ms=clock_tick;port.write=write_at;
-    strcpy(saved.mqtt_host,"old.example");strcpy(saved.mqtt_username,"user");strcpy(saved.mqtt_password,"secret");saved.mqtt_port=1883U;
+    strcpy(saved.mqtt_host,"old.example");strcpy(saved.mqtt_username,"user");strcpy(saved.mqtt_password,"secret");saved.mqtt_port=8883U;saved.flags=BOARD_CONFIG_FLAG_MQTT_TLS;
     assert(ABoxEc800At_Init(&at,&port) && MqttRuntime_Init());
     MqttRuntime_Task();
     assert(MqttRuntime_TestState()->state==ABOX_MQTT_RUNTIME_FAILED && !endpoint[0]); /* await-enrollment */
@@ -69,16 +69,16 @@ int main(void)
     unsigned before=transport_polls;step();assert(transport_polls>before);
     busy=1U;assert(MqttRuntime_StopFirst(now)==0);reach(ABOX_MQTT_RUNTIME_UNENROLLED);
     assert(MqttRuntime_StopFirst(now)==1);busy=0U;reach(ABOX_MQTT_RUNTIME_READY);
-    assert(!strcmp(endpoint,"old.example") && !applied_tls);
+    assert(!strcmp(endpoint,"old.example") && applied_tls);
     assert(MqttRuntime_ApplyEndpoint("tls.example",8883U,"user","secret",1U));reach(ABOX_MQTT_RUNTIME_BIND);
-    assert(MqttRuntime_ApplyEndpoint(saved.mqtt_host,saved.mqtt_port,"user","secret",0U));reach(ABOX_MQTT_RUNTIME_READY);
-    assert(!strcmp(endpoint,"old.example") && !applied_tls);
+    assert(MqttRuntime_ApplyEndpoint(saved.mqtt_host,saved.mqtt_port,"user","secret",1U));reach(ABOX_MQTT_RUNTIME_READY);
+    assert(!strcmp(endpoint,"old.example") && applied_tls);
     ABoxEc800At_OnModemReset(&at);unsigned expected=resets;reach(ABOX_MQTT_RUNTIME_READY);
     for(unsigned i=0;i<5U;++i)step();assert(resets==expected); /* RDY is not recursively re-fed. */
     supported=0U;
-    assert(MqttRuntime_ApplyEndpoint("unsupported.example",8883U,"user","secret",1U));reach(ABOX_MQTT_RUNTIME_FAILED);
+    ABoxEc800At_OnModemReset(&at);reach(ABOX_MQTT_RUNTIME_FAILED);
     assert(MqttRuntime_TestState()->safety_locked);
-    assert(MqttRuntime_ApplyEndpoint(saved.mqtt_host,saved.mqtt_port,"user","secret",0U));reach(ABOX_MQTT_RUNTIME_READY);
-    assert(!strcmp(endpoint,"old.example") && !applied_tls);
-    puts("Platform runtime integration: OTA stop/resume, TLS-bind rollback, single RDY and unsupported-TLS rollback passed");return 0;
+    assert(!MqttRuntime_ApplyEndpoint(saved.mqtt_host,saved.mqtt_port,"user","secret",0U));
+    assert(MqttRuntime_TestState()->safety_locked && !ABoxMqttRuntime_IsReady(MqttRuntime_TestState()));
+    puts("Platform runtime integration: OTA stop/resume, TLS-bind rollback, single RDY and unsupported-TLS refusal without plaintext fallback passed");return 0;
 }

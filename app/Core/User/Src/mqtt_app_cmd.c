@@ -19,6 +19,8 @@
 #include "mqtt_v4_store.h"
 #include "mqtt_runtime.h"
 #include "abox_cloud_queue.h"
+#include "abox_cloud_internal_v2.h"
+#include "abox_cloud_response.h"
 
 #define PRODUCT_ID "top_flying_wing"
 #define RESPONSE_QUEUE_DEPTH 2U
@@ -134,6 +136,17 @@ static uint8_t queue_payload(ResponseTopic topic, const char* payload, const cha
     return ABoxCloudQueue_Commit(&queue_storage, &queue_cursor);
 }
 
+uint8_t MQTT_App_QueueMqttTrialResponse(const char* request_id, uint16_t code)
+{
+    char timestamp[21], output[256];
+    const char* message = code == 202U ? "MQTT_CANDIDATE_TESTING" :
+        code == 200U ? "MQTT_CONFIG_SAVED" : "MQTT_CANDIDATE_RESTORED";
+    if (!TimeBase_FormatUtcMs(timestamp,sizeof(timestamp))) return 0U;
+    if (!ABoxCloudResponse_Encode(output,sizeof(output),"2.0",timestamp,PRODUCT_ID,
+                                  request_id,code,message,"{}")) return 0U;
+    return queue_payload(RESP_INTERNAL_CONFIG,output,request_id,code);
+}
+
 static const char* message_for_code(uint16_t code)
 {
     if (code == 200U) return "operation accepted";
@@ -141,6 +154,7 @@ static const char* message_for_code(uint16_t code)
     if (code == 4001U) return "invalid request";
     if (code == 4002U) return "unsupported command";
     if (code == 4003U) return "local touch control active or command busy; release touch key and retry";
+    if (code == 4006U) return "requestId conflict";
     if (code == 4004U) return "deviceType mismatch";
     if (code == 5002U) return "controller unreachable during preflight";
     if (code == 5003U) return "controller feedback not confirmed";
@@ -223,17 +237,17 @@ static cJSON* device_info(void)
     cJSON_AddBoolToObject(obj, "otaBusy", OtaService_IsBusy() ? 1 : 0);
     cJSON_AddStringToObject(obj, "mqttHost", cfg->mqtt_host);
     cJSON_AddNumberToObject(obj, "mqttPort", cfg->mqtt_port);
-    cJSON_AddBoolToObject(obj, "tlsEnabled", (cfg->flags & BOARD_CONFIG_FLAG_MQTT_TLS) != 0U);
-    cJSON_AddBoolToObject(obj, "tlsActive", MqttRuntime_IsTlsActive());
+    cJSON_AddBoolToObject(obj, "mqttTls", (cfg->flags & BOARD_CONFIG_FLAG_MQTT_TLS) != 0U);
+    cJSON_AddBoolToObject(obj, "mqttTlsActive", MqttRuntime_IsTlsActive());
+    cJSON_AddNumberToObject(obj, "mqttTlsProfileId", 0U);
+    cJSON_AddStringToObject(obj, "mqttAuthMode", "ca");
+    cJSON* protocols = cJSON_AddObjectToObject(obj, "maintenanceProtocols");
+    if (protocols) { cJSON_AddNumberToObject(protocols, "mqttConfigTransaction", 1U); cJSON_AddNumberToObject(protocols, "vidChangeTransaction", 1U); }
     cJSON_AddBoolToObject(obj, "trustedTime", TimeBase_IsTrusted());
     cJSON_AddNumberToObject(obj, "canBus", TOP_WING_CAN_BUS);
     cJSON_AddNumberToObject(obj, "canBitrate", 500000U);
     cJSON_AddNumberToObject(obj, "feedbackTimeoutMs", WING_ACTIVE_FEEDBACK_TIMEOUT_MS);
     cJSON_AddStringToObject(obj, "canSessionMode", "remote_only_idle_silent");
-    cJSON_AddNumberToObject(obj, "queryTimeoutMs", WING_QUERY_TIMEOUT_MS);
-    cJSON_AddNumberToObject(obj, "preflightQuietMs", WING_PREFLIGHT_QUIET_MS);
-    cJSON_AddNumberToObject(obj, "commandTimeoutMs", WING_COMMAND_TIMEOUT_MS);
-    cJSON_AddNumberToObject(obj, "maxRuntimeMs", WING_MAX_RUNTIME_MS);
     return obj;
 }
 
@@ -263,6 +277,7 @@ static void handle_internal_config(const char* request_id, cJSON* params)
     if (strcmp(name, "clear_log") == 0) { AppLog_Clear(); build_response(RESP_INTERNAL_CONFIG, request_id, 200U, WING_ACTION_NONE, 0U, 0); return; }
     if (strcmp(name, "reboot") == 0)
     {
+        if (MQTT_App_IsMqttConfigTrialActive()) { build_response(RESP_INTERNAL_CONFIG, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
         g_mqtt_app_ota_reset_pending = 1U;
         g_mqtt_app_ota_reset_tick = 0U;
         g_mqtt_app_ota_request_tick = HAL_GetTick();
@@ -271,21 +286,22 @@ static void handle_internal_config(const char* request_id, cJSON* params)
     }
     if (strcmp(name, "set_mqtt") == 0)
     {
-        cJSON* vid = cJSON_GetObjectItem(params, "vid");
-        cJSON* host = cJSON_GetObjectItem(params, "host");
-        cJSON* port = cJSON_GetObjectItem(params, "port");
-        cJSON* user = cJSON_GetObjectItem(params, "username");
-        cJSON* pass = cJSON_GetObjectItem(params, "password");
-        cJSON* tls = cJSON_GetObjectItem(params, "tlsEnabled");
-        uint8_t tls_enabled = (BoardConfig_Get()->flags & BOARD_CONFIG_FLAG_MQTT_TLS) != 0U;
-        if (tls && !cJSON_IsBool(tls)) { build_response(RESP_INTERNAL_CONFIG, request_id, 4001U, WING_ACTION_NONE, 0U, 0); return; }
+        ABoxCloudMqttTlsCandidate candidate;
         if (!MQTT_V4_StoreCanErase() || WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT)
         { build_response(RESP_INTERNAL_CONFIG, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
-        if (tls) tls_enabled = cJSON_IsTrue(tls);
-        uint8_t ok = MQTT_App_ScheduleMqttConfigTrial(request_id, cJSON_IsString(vid) ? vid->valuestring : 0,
-            cJSON_IsString(host) ? host->valuestring : 0, cJSON_IsNumber(port) ? (uint16_t)port->valuedouble : 0U,
-            cJSON_IsString(user) ? user->valuestring : 0, cJSON_IsString(pass) ? pass->valuestring : 0, tls_enabled);
-        build_response(RESP_INTERNAL_CONFIG, request_id, ok ? 202U : 500U, WING_ACTION_NONE, 0U, 0);
+        if (!ABoxCloudInternalV2_MqttTlsCandidate(params, &candidate) || candidate.tls_profile_id != 0U)
+        { build_response(RESP_INTERNAL_CONFIG, request_id, 4001U, WING_ACTION_NONE, 0U, 0); return; }
+        uint16_t reply=MQTT_App_MqttTrialReply(request_id,candidate.vid,candidate.host,candidate.port,
+                                                candidate.username,candidate.password);
+        if (reply) {
+            if (reply==200U || reply==202U || reply==500U) (void)MQTT_App_QueueMqttTrialResponse(request_id,reply);
+            else build_response(RESP_INTERNAL_CONFIG,request_id,reply,WING_ACTION_NONE,0U,0);
+            return;
+        }
+        uint8_t ok = MQTT_App_ScheduleMqttConfigTrial(request_id,candidate.vid,candidate.host,candidate.port,
+                                                      candidate.username,candidate.password,1U);
+        if (!ok) build_response(RESP_INTERNAL_CONFIG, request_id, 500U, WING_ACTION_NONE, 0U, 0);
+        else (void)MQTT_App_QueueMqttTrialResponse(request_id,202U);
         return;
     }
     build_response(RESP_INTERNAL_CONFIG, request_id, 4002U, WING_ACTION_NONE, 0U, 0);
@@ -304,6 +320,7 @@ static void handle_ota(const char* request_id, cJSON* params)
         strlen(version->valuestring) >= sizeof(request.version) || !cJSON_IsNumber(size) || size->valuedouble <= 0.0 ||
         size->valuedouble > 0x36800U || !parse_crc(crc, &parsed_crc))
     { build_response(RESP_INTERNAL_OTA, request_id, 4001U, WING_ACTION_NONE, 0U, 0); return; }
+    if (MQTT_App_IsMqttConfigTrialActive()) { build_response(RESP_INTERNAL_OTA, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
     if (!OtaService_IsReady()) { build_response(RESP_INTERNAL_OTA, request_id, 500U, WING_ACTION_NONE, 0U, 0); return; }
     if (g_ota_request_state != OTA_REQ_IDLE || OtaService_IsBusy()) { build_response(RESP_INTERNAL_OTA, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
     snprintf(request.url, sizeof(request.url), "%s", url->valuestring);
@@ -376,6 +393,8 @@ void MQTT_App_HandleOtaServiceTask(void)
 }
 
 #ifdef TOP_WING_HOST_TEST
+void MQTT_App_TestHandleConfig(const char* request_id, cJSON* params)
+{ handle_internal_config(request_id, params); }
 void MQTT_App_TestHandleOta(const char* request_id, cJSON* params)
 {
     handle_ota(request_id, params);

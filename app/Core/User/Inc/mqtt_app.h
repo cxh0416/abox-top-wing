@@ -14,6 +14,7 @@
 #define MQTT_APP_MQTT_CONFIG_TRIAL_TIMEOUT_MS 60000U
 
 void MQTT_App_Init(const char* device_id);
+uint8_t MQTT_App_IsMqttConfigTrialActive(void);
 void MQTT_App_Task(void);
 void MQTT_App_OnMessage(const char* topic, const char* payload);
 uint8_t MQTT_App_CanRunBackground(uint32_t guard_ms);

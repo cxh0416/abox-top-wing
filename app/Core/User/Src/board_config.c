@@ -75,7 +75,9 @@ void BoardConfig_Load(void)
 }
 
 const BoardConfigStore_t* BoardConfig_Get(void) { return &g_board_cfg; }
-uint8_t BoardConfig_HasMqttCredentials(void) { return g_have_saved_config; }
+uint8_t BoardConfig_HasMqttCredentials(void)
+{ return g_have_saved_config && (g_board_cfg.flags & BOARD_CONFIG_FLAG_MQTT_TLS) &&
+         g_board_cfg.mqtt_username[0] && g_board_cfg.mqtt_password[0]; }
 
 uint8_t BoardConfig_Save(const BoardConfigStore_t* cfg)
 {

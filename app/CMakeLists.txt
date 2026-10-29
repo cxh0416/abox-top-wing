@@ -112,6 +112,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     abox::ec800_ufs_at
     abox::enrollment_ec800_http
     abox::mqtt_trial
+    abox::maintenance_service
 
     # Add user defined libraries
 )

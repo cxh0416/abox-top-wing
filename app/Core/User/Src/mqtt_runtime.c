@@ -39,17 +39,9 @@ uint8_t MqttRuntime_ApplyCurrentConfig(void)
 uint8_t MqttRuntime_ApplyEndpoint(const char* host, uint16_t port, const char* user, const char* password, uint8_t tls)
 {
     ABoxMqttConfig c = {0};
-    if (!initialized || !host || !user || !password || !port ||
+    if (!initialized || !tls || !host || !user || !password || !port ||
         strlen(host) >= sizeof(pending_host) || strlen(user) >= sizeof(pending_user) ||
         strlen(password) >= sizeof(pending_password)) return 0U;
-    /* A rejected TLS capability probe must still allow a trial to restore
-     * its unchanged, checksummed original plain configuration. No TLS latch
-     * is cleared for a TLS target or a different endpoint/credential set. */
-    const BoardConfigStore_t* saved = BoardConfig_Get();
-    if (!tls && !(saved->flags & BOARD_CONFIG_FLAG_MQTT_TLS) &&
-        !strcmp(host, saved->mqtt_host) && port == saved->mqtt_port &&
-        !strcmp(user, saved->mqtt_username) && !strcmp(password, saved->mqtt_password))
-        (void)ABoxMqttRuntime_RecoveryComplete(&g_runtime);
     c.host = host; c.port = port; c.username = user; c.password = password; c.tls_enabled = tls;
     if (ABoxMqttRuntime_Restore(&g_runtime, &c, HAL_GetTick())) { endpoint_pending = 0U; return 1U; }
     /* A timeout may arrive during TLS preparation rather than CONNECT.
@@ -73,7 +65,7 @@ uint8_t MqttRuntime_Init(void)
         ABoxMqttRuntimeOptions options;
         ABoxMqttConfig c = config();
         if (!MQTT_Core_AtCore() || !ABoxMqttRuntimePort_BindCore(&port, &api)) return 0U;
-        ABoxMqttRuntimeOptions_StandardEc800(&options, ABOX_EC800_OWNER_PRODUCT_BASE + 3U, 0U);
+        ABoxMqttRuntimeOptions_V4Ec800(&options, ABOX_EC800_OWNER_PRODUCT_BASE + 3U, 0U);
         options.probe_tls_capability = 1U;
         options.query_clock_mode = 1U;
         options.ca_ciphersuite = 0xC02BU;

@@ -11,6 +11,8 @@ void TimeBase_UpdateFromCCLK(const char* line);
 
 /* 获取毫秒时间戳 */
 uint64_t TimeBase_GetMs(void);
+/* Outbound timestamps use zero until platform time is trusted. */
+uint64_t TimeBase_GetReportedMs(void);
 uint8_t TimeBase_FormatUtcMs(char* out, uint16_t out_sz);
 uint8_t TimeBase_FormatBeijing(char* out, uint16_t out_sz);
 uint8_t TimeBase_FormatBeijingFromTick(uint32_t tick, char* out, uint16_t out_sz);

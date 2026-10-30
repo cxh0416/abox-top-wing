@@ -150,7 +150,7 @@ static Request* reserve(void)
 
 static void complete(Request* r, uint16_t code)
 {
-    r->timestamp = TimeBase_GetMs();
+    r->timestamp = TimeBase_GetReportedMs();
     r->code = code;
     r->awaiting_dispatch = 0U;
     if (r->store_slot >= 0)
@@ -311,7 +311,7 @@ void MQTT_V4_HandleRequest(const char* text)
     }
     goto done;
 error:
-    if (request.request_id) (void)respond(request.request_id, code, TimeBase_GetMs(), 0U);
+    if (request.request_id) (void)respond(request.request_id, code, TimeBase_GetReportedMs(), 0U);
 done:
     ABoxMqttRequest_Close(&request);
 }
@@ -352,7 +352,7 @@ void MQTT_V4_AddSnapshot(cJSON* payload, const WingSnapshot* s)
 
 static uint64_t captured_time(uint32_t captured_tick)
 {
-    uint64_t timestamp = TimeBase_GetMs();
+    uint64_t timestamp = TimeBase_GetReportedMs();
     uint32_t age = HAL_GetTick() - captured_tick;
     return age <= INT32_MAX && timestamp >= age ? timestamp - age : 0U;
 }
@@ -384,8 +384,8 @@ static int publish_meta(ABoxCloudJobKind kind, uint64_t* operation)
 {
     const ABoxCloudV4Profile enabled = {profile.name, profile.version, NULL, 0U};
     int encoded = kind == ABOX_CLOUD_JOB_MANIFEST ?
-        ABoxCloudV4_Manifest(meta_buf, sizeof(meta_buf), TimeBase_GetMs(), TopFlyingWing_AppFwVersion(), &enabled, 1U, 0) :
-        ABoxCloudV4_Heartbeat(meta_buf, sizeof(meta_buf), TimeBase_GetMs(), TopFlyingWing_AppFwVersion(), NULL);
+        ABoxCloudV4_Manifest(meta_buf, sizeof(meta_buf), TimeBase_GetReportedMs(), TopFlyingWing_AppFwVersion(), &enabled, 1U, 0) :
+        ABoxCloudV4_Heartbeat(meta_buf, sizeof(meta_buf), TimeBase_GetReportedMs(), TopFlyingWing_AppFwVersion(), NULL);
     int ok = encoded && MQTT_Core_PublishExTracked(kind == ABOX_CLOUD_JOB_MANIFEST ? g_mqtt_app_manifest_topic : g_mqtt_app_heartbeat_topic,
         meta_buf, kind == ABOX_CLOUD_JOB_MANIFEST ? 1U : 0U, kind == ABOX_CLOUD_JOB_MANIFEST ? 1U : 0U, operation);
     if (ok && kind == ABOX_CLOUD_JOB_HEARTBEAT) { g_mqtt_app_last_hb_tick = HAL_GetTick(); g_mqtt_app_hb_pending = 0U; }

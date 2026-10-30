@@ -63,6 +63,12 @@ uint64_t TimeBase_GetMs(void)
     return TimeBase_GetSnapshot().utc_ms;
 }
 
+uint64_t TimeBase_GetReportedMs(void)
+{
+    ABoxClockSnapshot snapshot = TimeBase_GetSnapshot();
+    return ABoxClock_ReportedUtcMs(&snapshot);
+}
+
 ABoxClockSnapshot TimeBase_GetSnapshot(void)
 { return ABoxClock_Snapshot(&g_clock, ABox_PortGetMonotonicMs()); }
 uint16_t TimeBase_CheckExpiry(uint64_t expires)
@@ -81,8 +87,7 @@ uint8_t TimeBase_FormatUtcMs(char* out, uint16_t out_sz)
 {
     if (!out || !out_sz) return 0U;
     out[0] = '\0';
-    if (!TimeBase_IsValid()) return 0U;
-    return (uint8_t)ABoxMqttV4_FormatInteger(out, out_sz, TimeBase_GetMs());
+    return (uint8_t)ABoxMqttV4_FormatInteger(out, out_sz, TimeBase_GetReportedMs());
 }
 
 uint8_t TimeBase_FormatBeijing(char* out, uint16_t out_sz)

@@ -80,6 +80,7 @@ static void build_config(void)
     g_transport_config.legacy_json = 1U;
     g_transport_config.mqtt_version = g_config.tls_enabled ? 4U : 0U;
     g_transport_config.pdp_context_id = g_config.tls_enabled ? 1U : 0U;
+    g_transport_config.clean_session = 1U;
 }
 
 void MQTT_Core_Init(const MQTT_CoreConfig_t *config, MQTT_CoreMsgCallback_t callback)

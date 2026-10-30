@@ -34,8 +34,7 @@ void TimeSync_Init(const char* device_id)
         return;
     }
     const ABoxTimeClientPort port = {NULL, send, apply};
-    uint64_t seed = ABox_PortGetMonotonicMs() ^ ((uint64_t)HAL_GetUIDw0() << 32U) ^ HAL_GetUIDw1();
-    initialized = ABoxTimeClient_Init(&client, device_id, seed ? seed : 1U, &port);
+    initialized = ABoxTimeClient_Init(&client, device_id, 0U, &port);
     if (!initialized) APP_LOGE("TIME", "client initialization failed");
 }
 
@@ -43,8 +42,12 @@ const char* TimeSync_ResponseTopic(void) { return client.response_topic; }
 
 void TimeSync_Task(void)
 {
-    if (initialized) ABoxTimeClient_Poll(&client, MQTT_Core_IsReady() && MqttRuntime_IsTlsActive(),
-        MQTT_Core_GetReadySeq(), ABox_PortGetMonotonicMs(), TimeBase_GetMs());
+    if (!initialized) return;
+    uint8_t ready = MQTT_Core_IsReady() && MqttRuntime_IsTlsActive();
+    uint64_t mono = ABox_PortGetMonotonicMs();
+    ABoxClockSnapshot clock = TimeBase_GetSnapshot();
+    ABoxTimeClient_Poll(&client, ready, MQTT_Core_GetReadySeq(), mono,
+                        ABoxClock_ReportedUtcMs(&clock));
 }
 
 int TimeSync_OnMessage(const char* topic, const char* payload)
@@ -52,3 +55,7 @@ int TimeSync_OnMessage(const char* topic, const char* payload)
     return initialized && ABoxTimeClient_Message(&client, topic, payload, payload ? strlen(payload) : 0U,
         MQTT_Core_IsReady() && MqttRuntime_IsTlsActive(), MQTT_Core_GetReadySeq(), ABox_PortGetMonotonicMs());
 }
+
+#ifdef TOP_WING_HOST_TEST
+void TimeSync_TestReset(void) { memset(&client, 0, sizeof(client)); initialized = 0U; }
+#endif

@@ -59,6 +59,7 @@ uint8_t OTA_Info_Save(const OTA_Info_t* info)
     memcpy(flash_page.bytes+offsetof(OTA_Info_t,reserved),&marker,sizeof(marker)); return 1;
 }
 uint64_t TimeBase_GetMs(void) { return utc; }
+uint64_t TimeBase_GetReportedMs(void) { return utc; }
 ABoxClockSnapshot TimeBase_GetSnapshot(void)
 {
     ABoxClockSnapshot s = {0};

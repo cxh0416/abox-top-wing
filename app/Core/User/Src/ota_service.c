@@ -5,6 +5,7 @@
 #include "abox_boot_v2_ca_pem.h"
 #include "app_log.h"
 #include "app_version.h"
+#include "board_config.h"
 #include "boot_cfg.h"
 #include "mqtt_core.h"
 #include "mqtt_runtime.h"
@@ -50,7 +51,18 @@ int OtaService_AcquireIdemWorkspace(void)
 }
 void OtaService_ReleaseIdemWorkspace(void) { g_idem_workspace_borrowed = 0U; }
 uint8_t OtaService_BeginProvisioning(void){return !g_idem_workspace_borrowed && (uint8_t)ABoxBootV2App_BeginProvisioning();}
-void OtaService_Task(void){if (!g_idem_workspace_borrowed) ABoxBootV2App_Task();}
+void OtaService_Task(void)
+{
+ /* With saved credentials, let the initial MQTT connection pass WAIT_CA
+  * before local seeding asks it to stop. Starting the seed first makes OTA
+  * busy, which itself prevents WAIT_CA from advancing. Active OTA and
+  * provisioning must always continue, including while disconnected. */
+ if (g_idem_workspace_borrowed) return;
+ if (ABoxBootV2App_IsProvisioned() && !ABoxBootV2App_IsBusy() &&
+     strcmp(ABoxBootV2App_Phase(), "IDLE") == 0 &&
+     BoardConfig_HasMqttCredentials() && !MQTT_Core_IsReady()) return;
+ ABoxBootV2App_Task();
+}
 uint8_t OtaService_IsProvisioned(void){return(uint8_t)ABoxBootV2App_IsProvisioned();}uint8_t OtaService_IsReady(void){return(uint8_t)ABoxBootV2App_IsReady();}uint8_t OtaService_IsBusy(void){return(uint8_t)ABoxBootV2App_IsBusy();}
 const char*OtaService_Phase(void){return ABoxBootV2App_Phase();}const char*OtaService_TargetVersion(void){return ABoxBootV2App_TargetVersion();}uint32_t OtaService_LastError(void){return ABoxBootV2App_LastError();}
 uint8_t OtaService_Start(const OtaServiceRequest_t*r){ABoxBootV2AppRequest c;if(!r || g_idem_workspace_borrowed)return 0U;memcpy(&c,r,sizeof(c));return(uint8_t)ABoxBootV2App_Start(&c);}

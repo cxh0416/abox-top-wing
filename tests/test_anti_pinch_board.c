@@ -72,6 +72,7 @@ int main(void)
     assert(configurations == gpio_configurations); /* No duplicate pin setup. */
     assert(configured_input && configured_output);
     assert(output == GPIO_PIN_RESET && output_changes == 1U);
+    AntiPinchBoard_SetScopeEnabled(1U);
     AntiPinchBoard_Tick(1U);
     assert(output == GPIO_PIN_RESET && output_changes == 1U);
     unsigned initial_writes = writes;
@@ -124,6 +125,7 @@ int main(void)
 
     /* A contact closed at startup also works across uint32 tick wrap. */
     AntiPinchBoard_Init();
+    AntiPinchBoard_SetScopeEnabled(1U);
     contact = GPIO_PIN_SET;
     const uint32_t start = UINT32_MAX - 10U;
     AntiPinchBoard_Tick(start);
@@ -142,6 +144,7 @@ int main(void)
     assert(output == GPIO_PIN_RESET);
     /* Both sources share PA0; clearing one must not override the other. */
     AntiPinchBoard_Init();
+    AntiPinchBoard_SetScopeEnabled(1U);
     UltrasonicAlarm_Init(&sonar);
     contact = GPIO_PIN_RESET;
     uint8_t distances[8] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,30};
@@ -174,5 +177,16 @@ int main(void)
     UltrasonicAlarm_OnFrame(&sonar,2500U,WL300D_CAN_ID,1,0,8,distances);
     AntiPinchBoard_Tick(3500U);
     assert(output == GPIO_PIN_SET); /* Sonar silence must not clear a held strip. */
+
+    AntiPinchBoard_Init();
+    contact = GPIO_PIN_SET;
+    AntiPinchBoard_Tick(4000U);
+    AntiPinchBoard_Tick(4020U);
+    assert(output == GPIO_PIN_RESET && !AntiPinchBoard_TakeTrigger());
+    AntiPinchBoard_SetScopeEnabled(1U);
+    AntiPinchBoard_Tick(4021U);
+    assert(output == GPIO_PIN_RESET);
+    AntiPinchBoard_Tick(4041U);
+    assert(output == GPIO_PIN_SET && AntiPinchBoard_TakeTrigger());
     return 0;
 }

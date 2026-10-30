@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "app_log.h"
+#include "anti_pinch_board.h"
 #include "main.h"
 #include "wing_protocol.h"
 #include "ultrasonic_board.h"
@@ -67,11 +68,40 @@ static uint8_t g_pinch_pressed;
 
 static void stop_failed(uint16_t code);
 static uint8_t enforce_ultrasonic_stop(uint32_t now);
+static uint8_t ultrasonic_near_retraction_suppressed(void)
+{
+    const WingSnapshot* snapshot = &g_state.snapshot;
+    return snapshot->have_position &&
+           (snapshot->active_action == WING_ACTION_ASCEND ||
+            snapshot->active_action == WING_ACTION_DESCEND) &&
+           snapshot->position_mm >= WING_ULTRASONIC_SUPPRESS_MIN_MM &&
+           snapshot->position_mm <= WING_ULTRASONIC_SUPPRESS_MAX_MM;
+}
+
+static void sync_ultrasonic_suppression(void)
+{
+    UltrasonicBoard_SetAlarmSuppressed(ultrasonic_near_retraction_suppressed());
+}
+
 static uint8_t pinch_backoff_active(void)
 {
     return g_pinch.phase == PINCH_STOPPING || g_pinch.phase == PINCH_LIMITS ||
            g_pinch.phase == PINCH_MOVE_ACK || g_pinch.phase == PINCH_MOVING ||
            g_pinch.phase == PINCH_FINAL_STOP;
+}
+
+static uint8_t anti_pinch_scope_eligible(void)
+{
+    const WingSnapshot* snapshot = &g_state.snapshot;
+    return snapshot->have_position &&
+           snapshot->motion_state == WING_MOTION_DESCENDING &&
+           snapshot->position_mm <= WING_ANTI_PINCH_MAX_MM;
+}
+
+static void sync_anti_pinch_scope(void)
+{
+    AntiPinchBoard_SetScopeEnabled(
+        (uint8_t)(anti_pinch_scope_eligible() || g_pinch.phase != PINCH_NONE));
 }
 
 static CAN_HandleTypeDef* selected_can(void)
@@ -197,6 +227,8 @@ static void finish_idle(WingControlOwner owner)
     copy_id(request_id, g_session.stop_request_id[0] ? g_session.stop_request_id : g_session.direction_request_id);
     clear_session();
     WingState_SetIdleSilent(&g_state, owner);
+    sync_ultrasonic_suppression();
+    sync_anti_pinch_scope();
     push_report(WING_REPORT_STATE_CHANGED);
     /* Preserve the observation at stop confirmation, before idle-silent
      * deliberately invalidates live feedback. This does not change control. */
@@ -258,10 +290,18 @@ static void stop_failed(uint16_t code)
 }
 
 uint8_t WingController_IsUltrasonicBlocked(void)
-{ return UltrasonicBoard_MotionBlocked(HAL_GetTick()); }
+{
+    if (ultrasonic_near_retraction_suppressed()) return 0U;
+    return UltrasonicBoard_MotionBlocked(HAL_GetTick());
+}
 
 static void ultrasonic_stop(uint32_t now)
 {
+    if (ultrasonic_near_retraction_suppressed())
+    {
+        sync_ultrasonic_suppression();
+        return;
+    }
     /* An already-started pinch protection cycle has priority over sonar.
      * Keep its bounded target and its final stop confirmation unchanged. */
     if (pinch_backoff_active())
@@ -467,6 +507,8 @@ void WingController_Init(void)
     CAN_FilterTypeDef filter;
     WingState_Init(&g_state);
     clear_session();
+    sync_ultrasonic_suppression();
+    sync_anti_pinch_scope();
     g_result_head = g_result_count = 0U;
     g_report_head = g_report_count = 0U;
     memset(&filter, 0, sizeof(filter));
@@ -533,21 +575,27 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
 void WingController_AntiPinch(uint8_t pressed, uint8_t trigger)
 {
     uint32_t irq = __get_PRIMASK();
+    uint8_t eligible;
     __disable_irq();
-    g_pinch_pressed = pressed ? 1U : 0U;
+    eligible = anti_pinch_scope_eligible();
+    if (g_pinch.phase != PINCH_NONE) g_pinch_pressed = pressed ? 1U : 0U;
+    else g_pinch_pressed = pressed && eligible ? 1U : 0U;
     if (WingController_IsUltrasonicBlocked())
     {
-        if (trigger && !pinch_backoff_active()) g_pinch.phase = PINCH_HOLD;
+        if (pressed && trigger && eligible && !pinch_backoff_active())
+            g_pinch.phase = PINCH_HOLD;
+        sync_anti_pinch_scope();
         __set_PRIMASK(irq);
         return;
     }
-    if (g_pinch.phase == PINCH_HOLD && !pressed) g_pinch.phase = PINCH_NONE;
-    if (trigger && g_pinch.phase == PINCH_NONE)
+    if (g_pinch.phase == PINCH_HOLD && !g_pinch_pressed) g_pinch.phase = PINCH_NONE;
+    if (pressed && trigger && eligible && g_pinch.phase == PINCH_NONE)
     {
         g_pinch.phase = PINCH_STOPPING;
         APP_LOGW("PINCH", "contact: stop, confirm, bounded 20mm backoff");
         (void)begin_stop(STOP_SAFETY, "", HAL_GetTick());
     }
+    sync_anti_pinch_scope();
     __set_PRIMASK(irq);
 }
 
@@ -615,6 +663,8 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
     if (!msg.accepted) return;
     g_session.expected_query = QUERY_NONE;
     WingState_ApplyFeedback(&g_state, now, msg.position_mm, msg.fault_code, msg.moving);
+    sync_ultrasonic_suppression();
+    sync_anti_pinch_scope();
 
     if (g_session.state == SESSION_WAIT_RD1 || g_session.state == SESSION_WAIT_RD2)
     {
@@ -660,6 +710,8 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
             return;
         }
         WingState_AcceptDirection(&g_state, g_session.action, g_session.direction_request_id, now);
+        sync_ultrasonic_suppression();
+        sync_anti_pinch_scope();
         g_session.state = SESSION_RUNNING;
         g_session.phase_tick = now;
         g_session.last_poll_tick = now;
@@ -687,6 +739,8 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
 static void controller_task(uint32_t now)
 {
     WingState_Tick(&g_state, now);
+    sync_ultrasonic_suppression();
+    sync_anti_pinch_scope();
     if (enforce_ultrasonic_stop(now)) return;
     if (g_session.state != SESSION_WAIT_STOP_ACK && g_session.state != SESSION_WAIT_STOP_STATUS &&
         pinch_task(now)) return;

@@ -6,6 +6,7 @@
 static UltrasonicAlarm alarm;
 static volatile uint8_t ready;
 static volatile uint8_t stop_pending;
+static volatile uint8_t alarm_suppressed;
 static UltrasonicDiagnostics diagnostics;
 
 void UltrasonicBoard_Init(void)
@@ -14,9 +15,19 @@ void UltrasonicBoard_Init(void)
     __disable_irq();
     ready = 0U;
     stop_pending = 0U;
+    alarm_suppressed = 0U;
     UltrasonicAlarm_Init(&alarm);
     memset(&diagnostics, 0, sizeof(diagnostics));
     ready = 1U;
+    __set_PRIMASK(irq);
+}
+
+void UltrasonicBoard_SetAlarmSuppressed(uint8_t suppressed)
+{
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    alarm_suppressed = suppressed ? 1U : 0U;
+    if (alarm_suppressed) stop_pending = 0U;
     __set_PRIMASK(irq);
 }
 
@@ -49,7 +60,7 @@ void UltrasonicBoard_OnCanRx(CAN_HandleTypeDef* hcan)
                 diagnostics.accepted++;
                 diagnostics.last_valid_tick = now;
                 memcpy(diagnostics.last_valid_data, data, 8);
-                if (!was_active && alarm.active) stop_pending = 1U;
+                if (!was_active && alarm.active && !alarm_suppressed) stop_pending = 1U;
             }
         }
         __set_PRIMASK(irq);
@@ -60,7 +71,7 @@ uint8_t UltrasonicBoard_TakeTrigger(void)
 {
     uint32_t irq = __get_PRIMASK();
     __disable_irq();
-    uint8_t pending = stop_pending;
+    uint8_t pending = alarm_suppressed ? 0U : stop_pending;
     stop_pending = 0U;
     __set_PRIMASK(irq);
     return pending;
@@ -70,7 +81,8 @@ uint8_t UltrasonicBoard_MotionBlocked(uint32_t now)
 {
     uint32_t irq = __get_PRIMASK();
     __disable_irq();
-    uint8_t blocked = ready && (UltrasonicAlarm_Update(&alarm, now) || stop_pending);
+    uint8_t blocked = ready && !alarm_suppressed &&
+        (UltrasonicAlarm_Update(&alarm, now) || stop_pending);
     __set_PRIMASK(irq);
     return blocked;
 }
@@ -80,7 +92,7 @@ uint8_t UltrasonicBoard_IsAlarm(uint32_t now)
     uint32_t irq = __get_PRIMASK();
     uint8_t active;
     __disable_irq();
-    active = ready ? UltrasonicAlarm_Update(&alarm, now) : 0U;
+    active = ready && !alarm_suppressed ? UltrasonicAlarm_Update(&alarm, now) : 0U;
     __set_PRIMASK(irq);
     return active;
 }
@@ -93,5 +105,6 @@ void UltrasonicBoard_CopyDiagnostics(UltrasonicDiagnostics* out)
     out->seen = alarm.seen;
     out->mask = alarm.obstacle_mask;
     out->active = alarm.active;
+    out->suppressed = alarm_suppressed;
     __set_PRIMASK(irq);
 }

@@ -45,5 +45,21 @@ int main(void)
     assert(UltrasonicBoard_MotionBlocked(1100)); /* A short alarm cannot lose its stop event. */
     assert(UltrasonicBoard_TakeTrigger());
     assert(!UltrasonicBoard_TakeTrigger() && !UltrasonicBoard_MotionBlocked(1100));
+
+    UltrasonicBoard_Init();
+    consumed=0;count=1;headers[0]=(CAN_RxHeaderTypeDef){
+        .ExtId=WL300D_CAN_ID,.IDE=CAN_ID_EXT,.DLC=8};
+    memset(payloads[0],0xFF,8);payloads[0][0]=20;tick=2000;
+    UltrasonicBoard_OnCanRx(&hcan1);
+    assert(UltrasonicBoard_MotionBlocked(2000));
+    UltrasonicBoard_SetAlarmSuppressed(1);
+    UltrasonicBoard_CopyDiagnostics(&diag);
+    assert(diag.active && diag.suppressed);
+    assert(!UltrasonicBoard_IsAlarm(2000));
+    assert(!UltrasonicBoard_MotionBlocked(2000));
+    assert(!UltrasonicBoard_TakeTrigger());
+    UltrasonicBoard_SetAlarmSuppressed(0);
+    assert(UltrasonicBoard_IsAlarm(2000));
+    assert(UltrasonicBoard_MotionBlocked(2000));
     return 0;
 }

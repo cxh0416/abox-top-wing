@@ -17,6 +17,9 @@
 #define WING_DIRECTION_CONFLICT_SAMPLES 2U
 #define WING_ANTI_PINCH_BACKOFF_MM 20U
 #define WING_ANTI_PINCH_MOVE_TIMEOUT_MS 10000U
+#define WING_ANTI_PINCH_MAX_MM 100U
+#define WING_ULTRASONIC_SUPPRESS_MIN_MM 10U
+#define WING_ULTRASONIC_SUPPRESS_MAX_MM 50U
 
 typedef enum
 {
@@ -52,7 +55,7 @@ typedef struct
 
 void WingController_Init(void);
 void WingController_Task(uint32_t now);
-/* Main-loop only. Trigger is a consumed debounced contact edge. */
+/* Main-loop only. Valid only while descending within 0..100 mm. */
 void WingController_AntiPinch(uint8_t pressed, uint8_t trigger);
 void WingController_UltrasonicStop(void);
 uint8_t WingController_IsUltrasonicBlocked(void);

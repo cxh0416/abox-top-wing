@@ -16,6 +16,8 @@ static uint8_t g_rx[8];
 static uint8_t g_have_rx;
 static uint8_t g_fail_tx;
 extern uint8_t test_ultrasonic_blocked;
+extern uint8_t test_ultrasonic_suppressed;
+extern uint8_t test_anti_pinch_scope;
 extern unsigned test_ultrasonic_aborts;
 
 uint32_t HAL_GetTick(void) { return g_tick; }
@@ -119,7 +121,8 @@ static void drain_reports(void)
     while (WingController_TakeReportReason() != WING_REPORT_NONE) { }
 }
 
-static void start_running(WingAction action, const char* rid, uint16_t position)
+static void start_running_with_limits(WingAction action, const char* rid, uint16_t position,
+                                      uint16_t top, uint16_t bottom)
 {
     WingControlResult result;
     g_tick = 0U;
@@ -132,7 +135,7 @@ static void start_running(WingAction action, const char* rid, uint16_t position)
     assert(count_command('R', 'D') == 2U);
     status(position, 0U, 252U);
     assert(count_command('R', 'L') == 1U);
-    limits(100U, 10U, 253U);
+    limits(top, bottom, 253U);
     assert(count_command(action == WING_ACTION_ASCEND ? 'U' : 'D',
                          action == WING_ACTION_ASCEND ? 'P' : 'N') == 1U);
     ack(action, 254U);
@@ -141,6 +144,11 @@ static void start_running(WingAction action, const char* rid, uint16_t position)
     result = take_result();
     assert(result.code == 200U && result.action == action && !strcmp(result.request_id, rid));
     assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_REMOTE_RUNNING);
+}
+
+static void start_running(WingAction action, const char* rid, uint16_t position)
+{
+    start_running_with_limits(action, rid, position, 100U, 10U);
 }
 
 static void test_idle_silent_and_correlation(void)
@@ -304,12 +312,13 @@ static void move_ack(uint16_t target, uint8_t rejected, uint32_t tick)
 
 static void pinch_start(uint16_t start, uint16_t top)
 {
+    start_running_with_limits(WING_ACTION_DESCEND, "pinch-motion", start, top, 0U);
     WingController_AntiPinch(1U, 1U);
     assert(count_command('S', 'T') == 1U && count_command('M', 'O') == 0U);
-    ack(WING_ACTION_STOP, 1U);
-    status(start, 0U, 2U);
-    assert(count_command('R', 'L') == 1U);
-    limits(top, 0U, 3U);
+    ack(WING_ACTION_STOP, 256U);
+    status(start, 0U, 257U);
+    assert(count_command('R', 'L') == 2U);
+    limits(top, 0U, 258U);
 }
 
 static uint16_t last_move_target(void)
@@ -326,72 +335,79 @@ static void test_pinch_bounded_move_and_hold(void)
     pinch_start(50U, 100U);
     assert(count_command('M', 'O') == 1U && last_move_target() == 70U);
     assert(WingController_Request(WING_ACTION_DESCEND, "blocked") == 4003U);
-    move_ack(69U, 0U, 4U); /* Wrong target echo cannot advance the state. */
-    assert(count_command('R', 'D') == 1U);
-    move_ack(70U, 0U, 5U);
-    status(55U, 1U, 6U);
-    WingController_Task(106U); status(69U, 1U, 107U);
+    unsigned rd_count = count_command('R', 'D');
+    move_ack(69U, 0U, 259U); /* Wrong target echo cannot advance the state. */
+    assert(count_command('R', 'D') == rd_count);
+    move_ack(70U, 0U, 260U);
+    status(55U, 1U, 261U);
+    WingController_Task(362U); status(69U, 1U, 363U);
     assert(count_command('S', 'T') == 1U);
-    WingController_Task(207U); status(70U, 0U, 208U);
+    WingController_Task(464U); status(70U, 0U, 465U);
     assert(count_command('S', 'T') == 2U);
-    ack(WING_ACTION_STOP, 209U); status(70U, 0U, 210U);
+    ack(WING_ACTION_STOP, 466U); status(70U, 0U, 467U);
     for (unsigned i = 0; i < 30; ++i) {
         WingController_AntiPinch(1U, 0U);
-        WingController_Task(300U + i * 1000U);
+        WingController_Task(1000U + i * 1000U);
     }
     assert(count_command('M', 'O') == 1U);
     assert(WingController_Request(WING_ACTION_ASCEND, "held") == 4003U);
     WingController_AntiPinch(0U, 0U);
+    assert(WingController_Request(WING_ACTION_ASCEND, "released") == 0U);
+    reset_controller();
+    start_running_with_limits(WING_ACTION_DESCEND, "pinch-rearm", 50U, 100U, 0U);
     WingController_AntiPinch(1U, 1U);
-    assert(count_command('S', 'T') == 3U); /* A genuinely new press can rearm. */
+    assert(count_command('S', 'T') == 1U); /* A genuinely new press can rearm. */
 
     reset_controller(); pinch_start(95U, 100U);
     assert(last_move_target() == 100U); /* Never command a target above top. */
     reset_controller(); pinch_start(100U, 100U);
     assert(count_command('M', 'O') == 0U);
-    reset_controller(); pinch_start(65530U, 65535U);
-    assert(last_move_target() == 65535U); /* Addition cannot wrap. */
 }
 
 static void test_pinch_stop_confirmation_and_failures(void)
 {
     reset_controller();
+    start_running(WING_ACTION_DESCEND, "pinch-stop", 50U);
+    unsigned rl_count = count_command('R', 'L');
     WingController_AntiPinch(1U, 1U);
-    status(50U, 0U, 1U); /* No ST ACK: uncorrelated stopped report is ignored. */
-    assert(count_command('R', 'L') == 0U);
-    ack(WING_ACTION_STOP, 2U);
-    status_with_fault(50U, 1U, 1U, 3U);
-    assert(count_command('R', 'L') == 0U && count_command('M', 'O') == 0U);
-    WingController_Task(1000U);
+    status(50U, 0U, 256U); /* No ST ACK: uncorrelated stopped report is ignored. */
+    assert(count_command('R', 'L') == rl_count);
+    ack(WING_ACTION_STOP, 257U);
+    status_with_fault(50U, 1U, 1U, 258U);
+    assert(count_command('R', 'L') == rl_count && count_command('M', 'O') == 0U);
+    WingController_Task(1255U);
     assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_FAULT);
     WingController_AntiPinch(0U, 0U);
     assert(WingController_Request(WING_ACTION_DESCEND, "unsafe") == 4003U);
     assert(WingController_Request(WING_ACTION_STOP, "recover") == 0U);
-    ack(WING_ACTION_STOP, 1001U); status(50U, 0U, 1002U);
+    ack(WING_ACTION_STOP, 1256U); status(50U, 0U, 1257U);
     assert(count_command('M', 'O') == 0U); /* Explicit recovery never resumes MO. */
     WingController_AntiPinch(0U, 0U);
     assert(WingController_Request(WING_ACTION_ASCEND, "recovered") == 0U);
 
     reset_controller();
+    start_running(WING_ACTION_DESCEND, "pinch-timeout", 50U);
     WingController_AntiPinch(1U, 1U);
-    ack(WING_ACTION_STOP, 1U); status(50U, 0U, 2U);
-    WingController_Task(302U); /* Limit timeout: no movement. */
+    ack(WING_ACTION_STOP, 256U); status(50U, 0U, 257U);
+    WingController_Task(559U); /* Limit timeout: no movement. */
     assert(count_command('M', 'O') == 0U);
     assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_FAULT);
 
     reset_controller(); pinch_start(50U, 100U);
-    WingController_Task(1003U); /* MO might have executed despite lost ACK. */
+    WingController_Task(1258U); /* MO might have executed despite lost ACK. */
     assert(count_command('S', 'T') == 2U);
     reset_controller(); pinch_start(50U, 100U);
-    move_ack(70U, 1U, 4U); /* Rejection also ends with a confirmed stop. */
+    move_ack(70U, 1U, 259U); /* Rejection also ends with a confirmed stop. */
     assert(count_command('S', 'T') == 2U);
 
     reset_controller(); pinch_start(50U, 100U);
-    move_ack(70U, 0U, 4U); status(55U, 1U, 5U);
-    WingController_Task(506U); /* Feedback lost during backoff. */
+    move_ack(70U, 0U, 259U); status(55U, 1U, 260U);
+    WingController_Task(761U); /* Feedback lost during backoff. */
     assert(count_command('S', 'T') == 2U);
 
-    reset_controller(); g_fail_tx = 1U;
+    reset_controller();
+    start_running(WING_ACTION_DESCEND, "pinch-tx", 50U);
+    g_fail_tx = 1U;
     WingController_AntiPinch(1U, 1U);
     assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_FAULT);
     assert(count_command('M', 'O') == 0U);
@@ -401,39 +417,40 @@ static void test_pinch_move_abort_paths(void)
 {
     uint32_t now;
     reset_controller(); pinch_start(50U, 100U);
-    move_ack(70U, 0U, 4U);
+    move_ack(70U, 0U, 259U);
     assert(!WingController_GetSnapshot()->status_fresh); /* ACK is not feedback. */
-    WingController_Task(505U);
+    WingController_Task(760U);
     assert(count_command('S', 'T') == 2U);
 
     reset_controller(); pinch_start(50U, 100U);
-    move_ack(70U, 0U, 4U); status(55U, 1U, 5U);
-    WingController_Task(105U); status(50U, 1U, 106U);
+    move_ack(70U, 0U, 259U); status(55U, 1U, 260U);
+    WingController_Task(360U); status(50U, 1U, 361U);
     assert(count_command('S', 'T') == 2U); /* Unexpected downward motion. */
 
     reset_controller(); pinch_start(50U, 100U);
-    move_ack(70U, 0U, 4U); status_with_fault(55U, 1U, 2U, 5U);
+    move_ack(70U, 0U, 259U); status_with_fault(55U, 1U, 2U, 260U);
     assert(count_command('S', 'T') == 2U);
 
     reset_controller(); pinch_start(50U, 100U);
-    move_ack(70U, 0U, 4U); status(50U, 0U, 5U);
-    for (now = 105U; now <= 1105U; now += 100U) {
+    move_ack(70U, 0U, 259U); status(50U, 0U, 260U);
+    for (now = 360U; now <= 1360U; now += 100U) {
         WingController_Task(now); status(50U, 0U, now + 1U);
     }
     assert(count_command('S', 'T') == 2U); /* Never moves: abort after start grace. */
 
     reset_controller(); pinch_start(50U, 100U);
-    move_ack(70U, 0U, 4U); status(55U, 1U, 5U);
-    for (now = 105U; now < 10004U; now += 100U) {
+    move_ack(70U, 0U, 259U); status(55U, 1U, 260U);
+    for (now = 360U; now < 10259U; now += 100U) {
         WingController_Task(now); status(55U, 1U, now + 1U);
     }
-    WingController_Task(10004U);
+    WingController_Task(10259U);
     assert(count_command('S', 'T') == 2U); /* Continuous feedback cannot bypass runtime bound. */
 
     reset_controller();
+    start_running(WING_ACTION_DESCEND, "pinch-bad-limits", 50U);
     WingController_AntiPinch(1U, 1U);
-    ack(WING_ACTION_STOP, 1U); status(50U, 0U, 2U);
-    limits(10U, 20U, 3U); /* Malformed limits never produce MO. */
+    ack(WING_ACTION_STOP, 256U); status(50U, 0U, 257U);
+    limits(10U, 20U, 258U); /* Malformed limits never produce MO. */
     assert(count_command('M', 'O') == 0U);
     assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_FAULT);
 }
@@ -472,24 +489,25 @@ static void test_pinch_preemption_and_operator_stop(void)
     assert(count_command('M', 'O') == 1U);
 
     reset_controller();
+    start_running(WING_ACTION_DESCEND, "pinch-stop-cancel", 50U);
     WingController_AntiPinch(1U, 1U);
     assert(WingController_Request(WING_ACTION_STOP, "cancel-before-reverse") == 5003U);
-    ack(WING_ACTION_STOP, 1U); status(50U, 0U, 2U);
-    assert(count_command('R', 'L') == 0U && count_command('M', 'O') == 0U);
+    ack(WING_ACTION_STOP, 256U); status(50U, 0U, 257U);
+    assert(count_command('R', 'L') == 1U && count_command('M', 'O') == 0U);
 }
 
 static void test_ultrasonic_stop_and_no_resume(void)
 {
     for (WingAction dir=WING_ACTION_ASCEND; dir<=WING_ACTION_DESCEND; ++dir)
     {
-        reset_controller(); start_running(dir,"sonar-move",50U);
+        reset_controller(); start_running(dir,"sonar-move",60U);
         test_ultrasonic_blocked=1U;
         WingController_UltrasonicStop();
         assert(count_command('S','T')==1 && test_ultrasonic_aborts==1);
         assert(WingController_Request(WING_ACTION_ASCEND,"blocked")==4003);
-        status(50,0,256); /* Stopped feedback cannot replace ST ACK. */
+        status(60,0,256); /* Stopped feedback cannot replace ST ACK. */
         assert(WingController_GetSnapshot()->can_session==WING_CAN_SESSION_STOPPING);
-        ack(WING_ACTION_STOP,257);status(50,0,258);
+        ack(WING_ACTION_STOP,257);status(60,0,258);
         assert(WingController_GetSnapshot()->can_session==WING_CAN_SESSION_IDLE_SILENT);
         unsigned before=g_tx_count;
         for(unsigned n=0;n<10;++n) WingController_Task(300+n*100);
@@ -521,12 +539,12 @@ static void test_ultrasonic_preempts_can_callback_and_pinch(void)
     assert(count_command('M','O')==1);
     test_ultrasonic_blocked=1;WingController_UltrasonicStop();
     assert(count_command('S','T')==1 && !test_ultrasonic_aborts);
-    move_ack(70,0,4);status(55,1,5);
-    WingController_Task(105);status(60,1,106);
+    move_ack(70,0,259);status(55,1,260);
+    WingController_Task(360);status(60,1,361);
     assert(count_command('S','T')==1 && last_move_target()==70);
-    WingController_Task(206);status(70,0,207);
+    WingController_Task(462);status(70,0,463);
     assert(count_command('S','T')==2);
-    ack(WING_ACTION_STOP,208);status(70,0,209);
+    ack(WING_ACTION_STOP,464);status(70,0,465);
     assert(count_command('M','O')==1 && !test_ultrasonic_aborts);
     assert(WingController_Request(WING_ACTION_ASCEND,"sonar-held")==4003);
     test_ultrasonic_blocked=0;WingController_AntiPinch(1,0);
@@ -534,40 +552,130 @@ static void test_ultrasonic_preempts_can_callback_and_pinch(void)
     WingController_AntiPinch(0,0);
     assert(WingController_Request(WING_ACTION_ASCEND,"new-after-release")==0);
 
-    reset_controller();test_ultrasonic_blocked=1;
+    reset_controller();start_running(WING_ACTION_DESCEND,"sonar-pinch",60);
+    test_ultrasonic_blocked=1;
     WingController_UltrasonicStop();WingController_AntiPinch(1,1);
-    ack(WING_ACTION_STOP,1);status(50,0,2);
-    assert(count_command('M','O')==0 && count_command('R','L')==0);
-    reset_controller();test_ultrasonic_blocked=1;
+    ack(WING_ACTION_STOP,256);status(60,0,257);
+    assert(count_command('M','O')==0 && count_command('R','L')==1);
+    reset_controller();start_running(WING_ACTION_DESCEND,"sonar-timeout",60);
+    test_ultrasonic_blocked=1;
     WingController_UltrasonicStop();WingController_AntiPinch(1,1);
-    WingController_Task(1000);
+    WingController_Task(1255);
     assert(WingController_GetSnapshot()->can_session==WING_CAN_SESSION_FAULT);
 }
 
 static void test_ultrasonic_preserves_early_pinch_cycle_and_limits(void)
 {
     reset_controller();
+    start_running_with_limits(WING_ACTION_DESCEND, "pinch-sonar-early", 95U, 100U, 0U);
     WingController_AntiPinch(1,1);
     test_ultrasonic_blocked=1;WingController_UltrasonicStop();
-    ack(WING_ACTION_STOP,1);status(95,0,2);
-    WingController_Task(2);limits(100,0,3);
+    ack(WING_ACTION_STOP,256);status(95,0,257);
+    limits(100,0,258);
     assert(last_move_target()==100 && !test_ultrasonic_aborts);
-    move_ack(100,0,4);status(100,0,5);
-    ack(WING_ACTION_STOP,6);status(100,0,7);
+    move_ack(100,0,259);status(100,0,260);
+    ack(WING_ACTION_STOP,261);status(100,0,262);
     assert(count_command('M','O')==1 && count_command('S','T')==2);
     assert(WingController_Request(WING_ACTION_DESCEND,"blocked-after-backoff")==4003);
 }
 
 static void test_ultrasonic_stop_failure_stays_locked(void)
 {
-    reset_controller();start_running(WING_ACTION_DESCEND,"down",50);
+    reset_controller();start_running(WING_ACTION_DESCEND,"down",60);
     test_ultrasonic_blocked=1;WingController_UltrasonicStop();
     test_ultrasonic_blocked=0;WingController_Task(1255);
     assert(WingController_GetSnapshot()->can_session==WING_CAN_SESSION_FAULT);
     assert(WingController_Request(WING_ACTION_ASCEND,"after-failed-stop")==4003);
     assert(WingController_Request(WING_ACTION_STOP,"recover")==0);
-    ack(WING_ACTION_STOP,1256);status(50,0,1257);
+    ack(WING_ACTION_STOP,1256);status(60,0,1257);
     assert(WingController_Request(WING_ACTION_ASCEND,"after-confirmed-stop")==0);
+}
+
+static void test_anti_pinch_motion_scope(void)
+{
+    reset_controller();
+    WingController_AntiPinch(1U, 1U);
+    assert(!test_anti_pinch_scope && count_command('S', 'T') == 0U);
+    assert(WingController_Request(WING_ACTION_ASCEND, "idle-not-blocked") == 0U);
+
+    reset_controller();
+    start_running_with_limits(WING_ACTION_ASCEND, "up-no-pinch", 50U, 200U, 0U);
+    assert(!test_anti_pinch_scope);
+    WingController_AntiPinch(1U, 1U);
+    assert(count_command('S', 'T') == 0U);
+
+    reset_controller();
+    start_running_with_limits(WING_ACTION_DESCEND, "above-range", 101U, 200U, 0U);
+    assert(!test_anti_pinch_scope);
+    WingController_AntiPinch(1U, 1U);
+    assert(count_command('S', 'T') == 0U);
+
+    reset_controller();
+    start_running_with_limits(WING_ACTION_DESCEND, "range-low", 0U, 200U, 0U);
+    assert(test_anti_pinch_scope);
+    WingController_AntiPinch(1U, 1U);
+    assert(count_command('S', 'T') == 1U);
+
+    reset_controller();
+    start_running_with_limits(WING_ACTION_DESCEND, "range-high", 100U, 200U, 0U);
+    assert(test_anti_pinch_scope);
+    WingController_AntiPinch(1U, 1U);
+    assert(count_command('S', 'T') == 1U);
+}
+
+static void test_ultrasonic_near_retraction_suppression(void)
+{
+    reset_controller();
+    start_running_with_limits(WING_ACTION_DESCEND, "mask-low", 20U, 100U, 0U);
+    WingController_Task(355U);
+    status(10U, 1U, 356U);
+    assert(test_ultrasonic_suppressed);
+    test_ultrasonic_blocked = 1U;
+    WingController_UltrasonicStop();
+    assert(count_command('S', 'T') == 0U && test_ultrasonic_aborts == 0U);
+    WingController_Task(400U);
+    assert(count_command('S', 'T') == 0U);
+
+    reset_controller();
+    start_running_with_limits(WING_ACTION_ASCEND, "mask-high", 30U, 100U, 0U);
+    WingController_Task(355U);
+    status(50U, 1U, 356U);
+    assert(test_ultrasonic_suppressed);
+    test_ultrasonic_blocked = 1U;
+    WingController_UltrasonicStop();
+    WingController_Task(400U);
+    assert(count_command('S', 'T') == 0U && test_ultrasonic_aborts == 0U);
+
+    reset_controller();
+    start_running_with_limits(WING_ACTION_DESCEND, "door-open", 20U, 100U, 0U);
+    WingController_Task(355U);
+    status(1U, 1U, 356U);
+    assert(!test_ultrasonic_suppressed);
+    test_ultrasonic_blocked = 1U;
+    WingController_Task(400U);
+    assert(count_command('S', 'T') == 1U);
+
+    reset_controller();
+    start_running_with_limits(WING_ACTION_ASCEND, "above-mask", 30U, 100U, 0U);
+    WingController_Task(355U);
+    status(51U, 1U, 356U);
+    assert(!test_ultrasonic_suppressed);
+    test_ultrasonic_blocked = 1U;
+    WingController_Task(400U);
+    assert(count_command('S', 'T') == 1U);
+
+    reset_controller();
+    start_running_with_limits(WING_ACTION_ASCEND, "idle-check", 20U, 100U, 0U);
+    WingController_Task(355U);
+    status(20U, 1U, 356U);
+    assert(test_ultrasonic_suppressed);
+    test_ultrasonic_blocked = 1U;
+    assert(WingController_Request(WING_ACTION_STOP, "stop-mask") == 0U);
+    ack(WING_ACTION_STOP, 357U);
+    status(20U, 0U, 358U);
+    assert(!test_ultrasonic_suppressed);
+    assert(WingController_IsUltrasonicBlocked());
+    assert(WingController_Request(WING_ACTION_ASCEND, "idle-blocked") == 4003U);
 }
 
 int main(void)
@@ -589,5 +697,7 @@ int main(void)
     test_ultrasonic_preempts_can_callback_and_pinch();
     test_ultrasonic_stop_failure_stays_locked();
     test_ultrasonic_preserves_early_pinch_cycle_and_limits();
+    test_anti_pinch_motion_scope();
+    test_ultrasonic_near_retraction_suppression();
     return 0;
 }

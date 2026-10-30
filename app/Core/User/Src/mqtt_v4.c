@@ -164,6 +164,12 @@ static void complete(Request* r, uint16_t code)
     r->retry_response = !strcmp(r->device_id, g_mqtt_app_device_id) && !respond(r->id, code, r->timestamp, r->sync);
 }
 
+void MQTT_V4_CancelPendingMotion(void)
+{
+    for (unsigned i = 0; i < CACHE_COUNT; ++i)
+        if (requests[i].awaiting_dispatch) requests[i].cancelled = 1U;
+}
+
 void MQTT_V4_Task(void)
 {
     ABoxMqttIdempotency* cache;
@@ -295,14 +301,14 @@ void MQTT_V4_HandleRequest(const char* text)
     {
         /* A stop also cancels an intention still waiting for durable storage.
          * It must never start later after this stop has completed. */
-        for (unsigned i = 0; i < CACHE_COUNT; ++i)
-            if (requests[i].awaiting_dispatch) requests[i].cancelled = 1U;
+        MQTT_V4_CancelPendingMotion();
         code = WingController_Request(action, r->id);
         if (code) complete(r, code == 200U ? 5003U : code);
     }
     else
     {
-        if (WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT)
+        if (WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT ||
+            WingController_IsUltrasonicBlocked())
         { complete(r, 4003U); goto done; }
         code = ABoxMqttIdem_Begin(cache, key, request.digest, request.expires_at, &clock, &index);
         if (code != 200U) { complete(r, code); goto done; }

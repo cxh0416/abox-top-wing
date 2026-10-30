@@ -36,6 +36,14 @@ set(TOP_WING_CAN_BUS "2" CACHE STRING "Top flying wing CAN port (1 or 2)")
 if(NOT TOP_WING_CAN_BUS MATCHES "^[12]$")
     message(FATAL_ERROR "TOP_WING_CAN_BUS must be 1 or 2")
 endif()
+if(NOT TOP_WING_CAN_BUS STREQUAL "2")
+    message(FATAL_ERROR "CAN1 is reserved for WL300D; wing controller must use CAN2")
+endif()
+set(WL300D_CAN_ID "0x18EC0057" CACHE STRING "WL300D exact 29-bit report ID")
+set(WL300D_CAN_BITRATE "500000" CACHE STRING "WL300D CAN1 bitrate (500000 or 250000)")
+if(NOT WL300D_CAN_BITRATE MATCHES "^(500000|250000)$")
+    message(FATAL_ERROR "WL300D_CAN_BITRATE must be 500000 or 250000")
+endif()
 set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.6" CACHE STRING "Top flying wing App firmware version")
 
 # Enable CMake support for ASM and C languages
@@ -57,6 +65,11 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    Core/User/Src/anti_pinch_alarm.c
+    Core/User/Src/anti_pinch_board.c
+    Core/User/Src/ultrasonic_alarm.c
+    Core/User/Src/ultrasonic_board.c
+    Core/User/Src/ultrasonic_monitor.c
     Core/User/Src/abox_product_port.c
     Core/User/Src/app_log.c
     Core/User/Src/board_config.c
@@ -91,6 +104,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     TOP_FLYING_WING_BOOT_V2_APP=1
     TOP_WING_CAN_BUS=${TOP_WING_CAN_BUS}
+    WL300D_CAN_ID=${WL300D_CAN_ID}
+    WL300D_CAN_BITRATE=${WL300D_CAN_BITRATE}
     TOP_FLYING_WING_APP_FW_VERSION="${TOP_FLYING_WING_APP_FW_VERSION}"
 )
 

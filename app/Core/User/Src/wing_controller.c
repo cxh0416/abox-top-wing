@@ -5,6 +5,7 @@
 #include "app_log.h"
 #include "main.h"
 #include "wing_protocol.h"
+#include "ultrasonic_board.h"
 
 #define RESULT_QUEUE_DEPTH 4U
 #define REPORT_QUEUE_DEPTH 8U
@@ -20,7 +21,8 @@ typedef enum
     SESSION_WAIT_START_STATUS,
     SESSION_RUNNING,
     SESSION_WAIT_STOP_ACK,
-    SESSION_WAIT_STOP_STATUS
+    SESSION_WAIT_STOP_STATUS,
+    SESSION_FAULT
 } SessionState;
 
 typedef enum { QUERY_NONE = 0, QUERY_RD, QUERY_RL } ExpectedQuery;
@@ -54,6 +56,23 @@ static uint8_t g_report_head;
 static uint8_t g_report_count;
 static WingSnapshot g_confirmed_stop;
 static uint8_t g_have_confirmed_stop;
+typedef enum { PINCH_NONE, PINCH_STOPPING, PINCH_LIMITS, PINCH_MOVE_ACK,
+               PINCH_MOVING, PINCH_FINAL_STOP, PINCH_HOLD, PINCH_FAILED } PinchPhase;
+static struct {
+    PinchPhase phase;
+    uint32_t tick, feedback_tick;
+    uint16_t start_mm, target_mm, best_mm;
+} g_pinch;
+static uint8_t g_pinch_pressed;
+
+static void stop_failed(uint16_t code);
+static uint8_t enforce_ultrasonic_stop(uint32_t now);
+static uint8_t pinch_backoff_active(void)
+{
+    return g_pinch.phase == PINCH_STOPPING || g_pinch.phase == PINCH_LIMITS ||
+           g_pinch.phase == PINCH_MOVE_ACK || g_pinch.phase == PINCH_MOVING ||
+           g_pinch.phase == PINCH_FINAL_STOP;
+}
 
 static CAN_HandleTypeDef* selected_can(void)
 {
@@ -212,10 +231,7 @@ static uint8_t begin_stop(StopCause cause, const char* stop_request_id, uint32_t
     if (!tx_id || !tx_id[0]) tx_id = g_session.direction_request_id;
     if (!send_action(WING_ACTION_STOP, tx_id))
     {
-        if (stop_request_id && stop_request_id[0]) push_result(stop_request_id, WING_ACTION_STOP, 5001U);
-        WingState_SetSession(&g_state, WING_CAN_SESSION_FAULT, WING_PHASE_STOPPING,
-                             cause == STOP_CONFLICT ? WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_REMOTE);
-        finish_idle(cause == STOP_CONFLICT ? WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_NONE);
+        stop_failed(5001U);
         return 0U;
     }
     g_session.stop_command_sent = 1U;
@@ -230,16 +246,178 @@ static uint8_t begin_stop(StopCause cause, const char* stop_request_id, uint32_t
     return 1U;
 }
 
+static void stop_failed(uint16_t code)
+{
+    push_result(g_session.stop_request_id, WING_ACTION_STOP, code);
+    if (g_pinch.phase != PINCH_NONE) g_pinch.phase = PINCH_FAILED;
+    clear_session();
+    g_session.state = SESSION_FAULT;
+    WingState_SetSession(&g_state, WING_CAN_SESSION_FAULT, WING_PHASE_STOPPING,
+                         WING_CONTROL_OWNER_NONE);
+    push_report(WING_REPORT_STATE_CHANGED);
+}
+
+uint8_t WingController_IsUltrasonicBlocked(void)
+{ return UltrasonicBoard_MotionBlocked(HAL_GetTick()); }
+
+static void ultrasonic_stop(uint32_t now)
+{
+    /* An already-started pinch protection cycle has priority over sonar.
+     * Keep its bounded target and its final stop confirmation unchanged. */
+    if (pinch_backoff_active())
+    {
+        APP_LOGI("SONAR", "obstacle: preserve active pinch backoff");
+        return;
+    }
+    if (g_session.state == SESSION_WAIT_STOP_ACK || g_session.state == SESSION_WAIT_STOP_STATUS)
+        return;
+    int aborted = HAL_CAN_AbortTxRequest(selected_can(),
+        CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2) == HAL_OK;
+    g_session.stop_command_sent = 0U;
+    APP_LOGW("SONAR", "obstacle: cancel motion and confirm stop");
+    (void)begin_stop(STOP_SAFETY, "", now);
+    if (!aborted) stop_failed(5001U);
+}
+
+void WingController_UltrasonicStop(void)
+{
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    ultrasonic_stop(HAL_GetTick());
+    __set_PRIMASK(irq);
+}
+
+static uint8_t enforce_ultrasonic_stop(uint32_t now)
+{
+    if (!pinch_backoff_active() && WingController_IsUltrasonicBlocked() &&
+        g_session.state >= SESSION_WAIT_RD1 && g_session.state <= SESSION_RUNNING)
+    {
+        ultrasonic_stop(now);
+        return 1U;
+    }
+    return 0U;
+}
+
 static void finish_stop(void)
 {
+    PinchPhase pinch_phase = g_pinch.phase;
+    uint16_t stopped_mm = g_state.snapshot.position_mm;
     WingControlOwner owner = g_session.stop_cause == STOP_CONFLICT ?
                              WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_NONE;
+    if (g_state.snapshot.fault_code) { stop_failed(5005U); return; }
     if (g_session.stop_request_id[0])
         push_result(g_session.stop_request_id, WING_ACTION_STOP, 200U);
     WingState_ConfirmStop(&g_state, g_session.stop_request_id, g_session.stop_request_id[0] ? 1U : 0U);
     g_have_confirmed_stop = g_state.snapshot.status_fresh && !g_state.snapshot.fault_code;
     g_confirmed_stop = g_state.snapshot;
     finish_idle(owner);
+    if (pinch_phase == PINCH_STOPPING)
+    {
+        g_pinch.start_mm = stopped_mm;
+        g_pinch.phase = PINCH_LIMITS;
+        g_pinch.tick = HAL_GetTick();
+        WingState_InvalidateLimits(&g_state);
+        WingState_SetSession(&g_state, WING_CAN_SESSION_PREFLIGHT, WING_PHASE_CHECKING_LIMITS,
+                             WING_CONTROL_OWNER_NONE);
+        if (!send_query(QUERY_RL, g_pinch.tick)) stop_failed(5001U);
+    }
+    else if (pinch_phase == PINCH_FINAL_STOP) g_pinch.phase = PINCH_HOLD;
+}
+
+static void pinch_stop(uint32_t now)
+{
+    g_pinch.phase = PINCH_FINAL_STOP;
+    g_session.stop_command_sent = 0U;
+    (void)begin_stop(STOP_SAFETY, "", now);
+}
+
+/* Consume only the internal position-move phases. Stop uses the ordinary
+ * ST ACK + fresh RD stopped confirmation path, never an ACK alone. */
+static uint8_t pinch_receive(const WingCanMessage* msg, uint32_t now)
+{
+    if (g_pinch.phase == PINCH_LIMITS)
+    {
+        uint32_t target;
+        uint8_t data[8];
+        if (msg->kind != WING_FRAME_LIMITS || g_session.expected_query != QUERY_RL) return 1U;
+        g_session.expected_query = QUERY_NONE;
+        if (!WingState_ApplyLimits(&g_state, msg->top_limit_mm, msg->bottom_limit_mm) ||
+            g_pinch.start_mm < msg->bottom_limit_mm)
+        { stop_failed(5003U); return 1U; }
+        target = (uint32_t)g_pinch.start_mm + WING_ANTI_PINCH_BACKOFF_MM;
+        if (target > msg->top_limit_mm) target = msg->top_limit_mm;
+        if (target <= g_pinch.start_mm)
+        {
+            g_pinch.phase = PINCH_HOLD;
+            finish_idle(WING_CONTROL_OWNER_NONE);
+            APP_LOGI("PINCH", "already at upper limit; no upward move");
+            return 1U;
+        }
+        g_pinch.target_mm = (uint16_t)target;
+        g_pinch.best_mm = g_pinch.start_mm;
+        WingProtocol_EncodeMoveTo(g_pinch.target_mm, data);
+        g_pinch.phase = PINCH_MOVE_ACK;
+        g_pinch.tick = now;
+        if (!send_frame(data)) { pinch_stop(now); return 1U; }
+        WingState_SetSession(&g_state, WING_CAN_SESSION_PREFLIGHT, WING_PHASE_STARTING,
+                             WING_CONTROL_OWNER_NONE);
+        APP_LOGI("PINCH", "MO start=%u target=%u top=%u", (unsigned)g_pinch.start_mm,
+                 (unsigned)g_pinch.target_mm, (unsigned)msg->top_limit_mm);
+        return 1U;
+    }
+    if (g_pinch.phase == PINCH_MOVE_ACK)
+    {
+        if (msg->kind != WING_FRAME_MOVE_ACK || msg->position_mm != g_pinch.target_mm) return 1U;
+        if (!msg->accepted) { pinch_stop(now); return 1U; }
+        g_pinch.phase = PINCH_MOVING;
+        g_pinch.tick = now;
+        WingState_AcceptDirection(&g_state, WING_ACTION_ASCEND, "", now);
+        g_state.snapshot.control_owner = WING_CONTROL_OWNER_NONE;
+        /* An ACK starts a deadline; it is not fresh position feedback. */
+        g_pinch.feedback_tick = now;
+        if (!send_query(QUERY_RD, now)) pinch_stop(now);
+        return 1U;
+    }
+    if (g_pinch.phase == PINCH_MOVING)
+    {
+        if (msg->kind != WING_FRAME_STATUS || !msg->accepted || g_session.expected_query != QUERY_RD) return 1U;
+        g_session.expected_query = QUERY_NONE;
+        WingState_ApplyFeedback(&g_state, now, msg->position_mm, msg->fault_code, msg->moving);
+        g_pinch.feedback_tick = now;
+        if (msg->fault_code || msg->position_mm >= g_pinch.target_mm ||
+            (uint32_t)msg->position_mm + WING_DIRECTION_CONFLICT_MM < g_pinch.best_mm ||
+            (!msg->moving && now - g_pinch.tick >= WING_COMMAND_TIMEOUT_MS))
+        {
+            APP_LOGI("PINCH", "ending move pos=%u target=%u moving=%u fault=%u",
+                     (unsigned)msg->position_mm, (unsigned)g_pinch.target_mm,
+                     (unsigned)msg->moving, (unsigned)msg->fault_code);
+            pinch_stop(now);
+        }
+        else if (msg->position_mm > g_pinch.best_mm) g_pinch.best_mm = msg->position_mm;
+        return 1U;
+    }
+    return g_pinch.phase == PINCH_FAILED || g_pinch.phase == PINCH_HOLD;
+}
+
+static uint8_t pinch_task(uint32_t now)
+{
+    if (g_pinch.phase == PINCH_LIMITS && now - g_pinch.tick >= WING_QUERY_TIMEOUT_MS)
+        stop_failed(5003U);
+    else if (g_pinch.phase == PINCH_MOVE_ACK && now - g_pinch.tick >= WING_COMMAND_TIMEOUT_MS)
+        pinch_stop(now);
+    else if (g_pinch.phase == PINCH_MOVING)
+    {
+        if (WingState_NeedsSafetyStop(&g_state) ||
+            now - g_pinch.feedback_tick > WING_ACTIVE_FEEDBACK_TIMEOUT_MS ||
+            now - g_pinch.tick >= WING_ANTI_PINCH_MOVE_TIMEOUT_MS)
+            pinch_stop(now);
+        else if (g_session.expected_query == QUERY_NONE && now - g_session.last_poll_tick >= WING_ACTIVE_STATUS_POLL_MS)
+        {
+            if (!send_query(QUERY_RD, now)) pinch_stop(now);
+        }
+    }
+    return g_pinch.phase == PINCH_LIMITS || g_pinch.phase == PINCH_MOVE_ACK ||
+           g_pinch.phase == PINCH_MOVING || g_pinch.phase == PINCH_FAILED || g_pinch.phase == PINCH_HOLD;
 }
 
 static void assess_running_status(uint32_t now)
@@ -283,6 +461,8 @@ static void assess_running_status(uint32_t now)
 
 void WingController_Init(void)
 {
+    memset(&g_pinch, 0, sizeof(g_pinch));
+    g_pinch_pressed = 0U;
     g_have_confirmed_stop = 0U;
     CAN_FilterTypeDef filter;
     WingState_Init(&g_state);
@@ -304,7 +484,7 @@ void WingController_Init(void)
              (unsigned long)WING_CAN_RX_ID);
 }
 
-uint16_t WingController_Request(WingAction action, const char* request_id)
+static uint16_t controller_request(WingAction action, const char* request_id)
 {
     uint32_t now = HAL_GetTick();
     uint16_t code;
@@ -312,12 +492,15 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
 
     if (action == WING_ACTION_STOP)
     {
+        /* An explicit operator stop cancels any automatic upward continuation. */
+        if (g_pinch.phase != PINCH_NONE) g_pinch.phase = PINCH_FINAL_STOP;
         /* Idle also needs feedback confirmation for an explicit stop. */
         if (g_session.state == SESSION_WAIT_STOP_ACK || g_session.state == SESSION_WAIT_STOP_STATUS)
             return 5003U;
         return begin_stop(STOP_USER, request_id, now) ? 0U : 5001U;
     }
 
+    if (g_pinch.phase != PINCH_NONE || g_pinch_pressed || WingController_IsUltrasonicBlocked()) return 4003U;
     code = WingState_AdmissionCode(&g_state, action);
     if (code) return code;
     clear_session();
@@ -337,17 +520,51 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
     return 0U;
 }
 
+uint16_t WingController_Request(WingAction action, const char* request_id)
+{
+    uint32_t irq = __get_PRIMASK();
+    uint16_t code;
+    __disable_irq();
+    code = controller_request(action, request_id);
+    __set_PRIMASK(irq);
+    return code;
+}
+
+void WingController_AntiPinch(uint8_t pressed, uint8_t trigger)
+{
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    g_pinch_pressed = pressed ? 1U : 0U;
+    if (WingController_IsUltrasonicBlocked())
+    {
+        if (trigger && !pinch_backoff_active()) g_pinch.phase = PINCH_HOLD;
+        __set_PRIMASK(irq);
+        return;
+    }
+    if (g_pinch.phase == PINCH_HOLD && !pressed) g_pinch.phase = PINCH_NONE;
+    if (trigger && g_pinch.phase == PINCH_NONE)
+    {
+        g_pinch.phase = PINCH_STOPPING;
+        APP_LOGW("PINCH", "contact: stop, confirm, bounded 20mm backoff");
+        (void)begin_stop(STOP_SAFETY, "", HAL_GetTick());
+    }
+    __set_PRIMASK(irq);
+}
+
 void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
 {
     CAN_RxHeaderTypeDef header;
     uint8_t data[8];
     WingCanMessage msg;
     uint32_t now;
-    if (hcan != selected_can()) return;
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &header, data) != HAL_OK) return;
+    if (hcan != selected_can()) return; /* Drain even the unused bus FIFO. */
     if (header.IDE != CAN_ID_EXT ||
         !WingProtocol_Decode(header.ExtId, (uint8_t)header.DLC, data, &msg)) return;
     now = HAL_GetTick();
+    if (enforce_ultrasonic_stop(now)) return;
+    if (g_session.state != SESSION_WAIT_STOP_ACK && g_session.state != SESSION_WAIT_STOP_STATUS &&
+        pinch_receive(&msg, now)) return;
 
     if (msg.kind == WING_FRAME_ACK)
     {
@@ -364,8 +581,7 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
         {
             if (!msg.accepted)
             {
-                if (g_session.stop_request_id[0]) push_result(g_session.stop_request_id, WING_ACTION_STOP, 5004U);
-                finish_idle(g_session.stop_cause == STOP_CONFLICT ? WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_NONE);
+                stop_failed(5004U);
                 return;
             }
             g_session.state = SESSION_WAIT_STOP_STATUS;
@@ -462,14 +678,18 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
 
     if (g_session.state == SESSION_WAIT_STOP_STATUS)
     {
-        if (!msg.moving || msg.fault_code) finish_stop();
+        if (msg.fault_code) { stop_failed(5005U); return; }
+        if (!msg.moving) finish_stop();
         return;
     }
 }
 
-void WingController_Task(uint32_t now)
+static void controller_task(uint32_t now)
 {
     WingState_Tick(&g_state, now);
+    if (enforce_ultrasonic_stop(now)) return;
+    if (g_session.state != SESSION_WAIT_STOP_ACK && g_session.state != SESSION_WAIT_STOP_STATUS &&
+        pinch_task(now)) return;
 
     if (g_session.state == SESSION_IDLE) return;
 
@@ -497,8 +717,7 @@ void WingController_Task(uint32_t now)
     if ((g_session.state == SESSION_WAIT_START_ACK || g_session.state == SESSION_WAIT_START_STATUS) &&
         (now - g_session.phase_tick) >= WING_COMMAND_TIMEOUT_MS)
     {
-        if (g_session.state == SESSION_WAIT_START_ACK) fail_direction(5003U, WING_CONTROL_OWNER_NONE);
-        else (void)begin_stop(STOP_SAFETY, "", now);
+        (void)begin_stop(STOP_SAFETY, "", now);
         return;
     }
 
@@ -523,11 +742,16 @@ void WingController_Task(uint32_t now)
     if ((g_session.state == SESSION_WAIT_STOP_ACK || g_session.state == SESSION_WAIT_STOP_STATUS) &&
         (now - g_session.stop_tick) >= WING_COMMAND_TIMEOUT_MS)
     {
-        if (g_session.stop_request_id[0])
-            push_result(g_session.stop_request_id, WING_ACTION_STOP, 5003U);
-        finish_idle(g_session.stop_cause == STOP_CONFLICT ?
-                    WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_NONE);
+        stop_failed(5003U);
     }
+}
+
+void WingController_Task(uint32_t now)
+{
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    controller_task(now);
+    __set_PRIMASK(irq);
 }
 
 const WingSnapshot* WingController_GetSnapshot(void) { return &g_state.snapshot; }

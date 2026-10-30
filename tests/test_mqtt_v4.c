@@ -365,6 +365,36 @@ static void test_legacy_flash_compatibility(void)
     request("legacy-1","ascend"); assert(code()==4003 && !g_tx_count);
 }
 
+static void test_pinch_cancels_queued_motion(void)
+{
+    reset_all();
+    ota_busy = 1U;
+    request("before-pinch", "descend");
+    assert(!g_tx_count);
+    MQTT_V4_CancelPendingMotion();
+    ota_busy = 0U;
+    pump();
+    assert(!g_tx_count && code() == 4003U);
+}
+
+extern uint8_t test_ultrasonic_blocked;
+static void test_ultrasonic_cancels_queued_and_rejects_held_commands(void)
+{
+    reset_all();ota_busy=1;
+    request("queued-before-sonar","descend");
+    assert(!g_tx_count);
+    test_ultrasonic_blocked=1;
+    MQTT_V4_CancelPendingMotion();
+    test_ultrasonic_blocked=0; /* Even if alarm clears before persistence finishes. */
+    ota_busy=0;pump();
+    assert(!g_tx_count && code()==4003);
+    reset_all();test_ultrasonic_blocked=1;
+    request("during-sonar","ascend");
+    assert(!g_tx_count && code()==4003);
+    test_ultrasonic_blocked=0;pump();
+    assert(!g_tx_count); /* A rejected request is never queued for later movement. */
+}
+
 int main(int argc, char** argv)
 {
     if (argc == 2 && !strcmp(argv[1], "--describe"))
@@ -384,6 +414,8 @@ int main(int argc, char** argv)
     test_expiry_and_strict_input(); test_replay_and_reboot(); test_uncertain_and_torn_records();
     test_stop_confirmation_and_long_ids(); test_endpoint_turnaround(); test_capacity_preserves_protected_requests(); test_bootstrap_sync_and_report_qos();
     test_async_stop_and_expiry(); test_durable_response_and_missing_files(); test_identity_scopes(); test_legacy_flash_compatibility();
+    test_pinch_cancels_queued_motion();
+    test_ultrasonic_cancels_queued_and_rejects_held_commands();
     puts("V4 adapter: expiry, canonical replay, reboot/torn flash, confirmed stop, bootstrap/sync/QoS passed");
     return 0;
 }

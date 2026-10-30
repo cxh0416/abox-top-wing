@@ -60,9 +60,9 @@ void Error_Handler(void);
 #define PVIN_OUT1_Pin GPIO_PIN_0
 #define PVIN_OUT1_GPIO_Port GPIOA
 #define PVIN_OUT2_Pin GPIO_PIN_1
-#define PVIN_OUT2_GPIO_Port GPIOA
+#define PVIN_OUT2_GPIO_Port GPIOB
 #define PVIN_OUT3_Pin GPIO_PIN_2
-#define PVIN_OUT3_GPIO_Port GPIOA
+#define PVIN_OUT3_GPIO_Port GPIOB
 #define IO_IN1_Pin GPIO_PIN_4
 #define IO_IN1_GPIO_Port GPIOA
 #define IO_IN2_Pin GPIO_PIN_5
@@ -73,12 +73,12 @@ void Error_Handler(void);
 #define IO_IN4_GPIO_Port GPIOA
 #define RELAY_CTL_Pin GPIO_PIN_4
 #define RELAY_CTL_GPIO_Port GPIOC
-#define LED_1_Pin GPIO_PIN_0
-#define LED_1_GPIO_Port GPIOB
-#define LED_2_Pin GPIO_PIN_1
-#define LED_2_GPIO_Port GPIOB
-#define LED_3_Pin GPIO_PIN_2
-#define LED_3_GPIO_Port GPIOB
+#define LED_1_Pin GPIO_PIN_13
+#define LED_1_GPIO_Port GPIOC
+#define LED_2_Pin GPIO_PIN_14
+#define LED_2_GPIO_Port GPIOC
+#define LED_3_Pin GPIO_PIN_15
+#define LED_3_GPIO_Port GPIOC
 #define CAN2_STB_Pin GPIO_PIN_14
 #define CAN2_STB_GPIO_Port GPIOB
 #define CAN1_STB_Pin GPIO_PIN_15
@@ -93,6 +93,12 @@ void Error_Handler(void);
 #define EC_MAIN_RI_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
+
+/* Bench wiring: external B11 reaches PA7; first power output uses PA0. */
+#define ANTI_PINCH_CONTACT_Pin IO_IN4_Pin
+#define ANTI_PINCH_CONTACT_GPIO_Port IO_IN4_GPIO_Port
+#define ANTI_PINCH_OUTPUT_Pin PVIN_OUT1_Pin
+#define ANTI_PINCH_OUTPUT_GPIO_Port PVIN_OUT1_GPIO_Port
 
 /* USER CODE END Private defines */
 

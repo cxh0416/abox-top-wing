@@ -28,6 +28,14 @@ void WingProtocol_EncodeStatusQuery(uint8_t out[WING_CAN_DLC])
     out[1] = 'D';
 }
 
+void WingProtocol_EncodeMoveTo(uint16_t position_mm, uint8_t out[WING_CAN_DLC])
+{
+    memset(out, 0, WING_CAN_DLC);
+    out[0] = 'M'; out[1] = 'O';
+    out[2] = (uint8_t)(position_mm >> 8);
+    out[3] = (uint8_t)position_mm;
+}
+
 void WingProtocol_EncodeLimitQuery(uint8_t out[WING_CAN_DLC])
 {
     if (!out) return;
@@ -42,6 +50,14 @@ uint8_t WingProtocol_Decode(uint32_t ext_id, uint8_t dlc, const uint8_t data[WIN
     uint8_t b0, b1;
     if (!data || !out || ext_id != WING_CAN_RX_ID || dlc != WING_CAN_DLC) return 0U;
     memset(out, 0, sizeof(*out));
+    if (data[0] == 'M' && data[1] == 'O')
+    {
+        if (data[7] > 1U) return 0U;
+        out->kind = WING_FRAME_MOVE_ACK;
+        out->position_mm = (uint16_t)(((uint16_t)data[2] << 8) | data[3]);
+        out->accepted = data[7] == 0U;
+        return 1U;
+    }
     if (data[0] == 'R' && data[1] == 'D')
     {
         if (data[4] > 16U || data[5] > 1U || data[7] > 1U) return 0U;

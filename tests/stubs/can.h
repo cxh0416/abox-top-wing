@@ -16,6 +16,8 @@ typedef struct
 {
     uint32_t ExtId;
     uint32_t IDE;
+    uint32_t RTR;
+    uint32_t StdId;
     uint32_t DLC;
 } CAN_RxHeaderTypeDef;
 typedef struct
@@ -32,11 +34,15 @@ typedef struct
 #define HAL_ERROR 1
 #define CAN_ID_EXT 1U
 #define CAN_RTR_DATA 0U
+#define CAN_RTR_REMOTE 2U
 #define CAN_FILTERMODE_IDMASK 0U
 #define CAN_FILTERSCALE_32BIT 0U
 #define CAN_FILTER_FIFO0 0U
 #define CAN_RX_FIFO0 0U
 #define CAN_IT_RX_FIFO0_MSG_PENDING 1U
+#define CAN_TX_MAILBOX0 1U
+#define CAN_TX_MAILBOX1 2U
+#define CAN_TX_MAILBOX2 4U
 #define ENABLE 1U
 #define DISABLE 0U
 
@@ -45,8 +51,10 @@ extern CAN_HandleTypeDef hcan2;
 
 int HAL_CAN_AddTxMessage(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* header,
                          uint8_t data[8], uint32_t* mailbox);
+int HAL_CAN_AbortTxRequest(CAN_HandleTypeDef* hcan, uint32_t mailboxes);
 int HAL_CAN_GetRxMessage(CAN_HandleTypeDef* hcan, uint32_t fifo,
                          CAN_RxHeaderTypeDef* header, uint8_t data[8]);
+uint32_t HAL_CAN_GetRxFifoFillLevel(CAN_HandleTypeDef* hcan, uint32_t fifo);
 int HAL_CAN_ConfigFilter(CAN_HandleTypeDef* hcan, CAN_FilterTypeDef* filter);
 int HAL_CAN_Start(CAN_HandleTypeDef* hcan);
 int HAL_CAN_ActivateNotification(CAN_HandleTypeDef* hcan, uint32_t notification);

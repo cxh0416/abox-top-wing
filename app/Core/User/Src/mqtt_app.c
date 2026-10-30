@@ -201,7 +201,7 @@ static uint8_t mqtt_trial_task(uint32_t now)
 
 void MQTT_App_Task(void)
 {
-    uint32_t now=HAL_GetTick();confirm_boot_trial(now);WingController_Task(now);MQTT_App_HandleOtaServiceTask();MQTT_App_HandleWingResultTask();MQTT_V4_Task();TimeSync_Task();
+    uint32_t now=HAL_GetTick();confirm_boot_trial(now);MQTT_App_HandleOtaServiceTask();MQTT_App_HandleWingResultTask();MQTT_V4_Task();TimeSync_Task();
     if(g_mqtt_app_ota_reset_pending){if(g_mqtt_app_ota_reset_tick&&now-g_mqtt_app_ota_reset_tick>=MQTT_APP_OTA_RESET_DELAY_MS)NVIC_SystemReset();if(MQTT_Core_IsReady()&&g_mqtt_app_resp_pending)MQTT_App_HandlePendingResponseTask();if(g_mqtt_app_ota_request_tick&&now-g_mqtt_app_ota_request_tick>=MQTT_APP_OTA_FORCE_RESET_MS)NVIC_SystemReset();return;}
     if(g_mqtt_app_resp_pending){MQTT_App_HandlePendingResponseTask();if(g_mqtt_app_resp_pending)return;}
     if(mqtt_trial_task(now))return;

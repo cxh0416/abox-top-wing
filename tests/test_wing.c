@@ -14,6 +14,13 @@ int main(void)
     assert(WingProtocol_EncodeAction(WING_ACTION_STOP, b) && b[0] == 'S' && b[1] == 'T');
     WingProtocol_EncodeStatusQuery(b); assert(b[0] == 'R' && b[1] == 'D');
     WingProtocol_EncodeLimitQuery(b); assert(b[0] == 'R' && b[1] == 'L');
+    WingProtocol_EncodeMoveTo(0x1234U, b);
+    assert(b[0] == 'M' && b[1] == 'O' && b[2] == 0x12U && b[3] == 0x34U && b[7] == 0U);
+    assert(WingProtocol_Decode(1U, 8U, b, &m) && m.kind == WING_FRAME_MOVE_ACK && m.position_mm == 0x1234U && m.accepted);
+    b[7] = 1U;
+    assert(WingProtocol_Decode(1U, 8U, b, &m) && !m.accepted);
+    b[7] = 2U;
+    assert(!WingProtocol_Decode(1U, 8U, b, &m));
 
     memset(b, 0, sizeof(b)); b[0] = 'R'; b[1] = 'D'; b[2] = 1; b[3] = 2; b[5] = 1;
     assert(!WingProtocol_Decode(2, 8, b, &m));

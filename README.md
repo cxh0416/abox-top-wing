@@ -1,6 +1,6 @@
 # A-BOX 顶飞翼固件
 
-产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，当前构建基线为 `top-flying-wing-1.1.6`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
+产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，当前正式构建版本为 `top-flying-wing-1.1.8`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
 
 公共组件、完整 Boot 边界和其他产品迁移状态见 `platform/README.md`、`platform/docs/PLATFORM_CONTRACT.md`、`platform/docs/PRODUCT_MATRIX.md`。
 
@@ -10,7 +10,7 @@
 - `platform/targets/stm32f105_abox_boot/`：公共平台完整 Boot 目标，只负责安装、试运行确认与回滚，不联网下载。
 - `docs/vendor/`：厂家 CAN/控制器资料，仅作为设备端帧依据。
 - `docs/protocols/`：按公共基础、产品业务 Profile 和内部运维接口拆分的协议文档。
-- `dist/`：仅保存最新正式版的 App、Boot、Full 和校验清单；每次正式打包成功后整体替换，不保存历史版本或诊断包。
+- `dist/`：仅保存最新正式版的 App、Boot、Boot State、含 State 的 Full、校验清单和烧录说明；每次正式打包成功后整体替换，不保存历史版本或诊断包。
 
 ## MQTT 接口边界
 
@@ -44,15 +44,16 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build_release.ps1
-powershell -ExecutionPolicy Bypass -File .\tools\flash_full_jlink.ps1
+python .\tools\verify_release.py .\dist --version top-flying-wing-1.1.8
+python .\tests\test_release_package.py
 powershell -ExecutionPolicy Bypass -File .\tools\test_host.ps1
 powershell -ExecutionPolicy Bypass -File .\tools\test_v4.ps1 -ServiceRoot F:\work\device-ota-service
 python .\tools\test_boot_v2_contract.py
 ```
 
-`flash_full_jlink.ps1` 将现场调试用 Full 烧录到 `0x08000000`，执行 Verify，
-只擦除 `0x0803E800..0x0803F7FF` 两页 Boot State 后复位；不会擦除
-`0x0803F800` 配置页。使用 `-ValidateOnly` 可只检查镜像和生成命令。
+正式包按照 `dist/README_FLASH.md` 操作：将 `TopFlyingWing_Full.bin` 加载到 `0x08000000`，仅擦写文件覆盖的页并校验，保留 `0x0803F800` 配置页，不执行整片擦除。Full 已含匹配的 State A/B 区域。
+
+`flash_full_jlink.ps1` 是旧式不含 State 的 Full 调试工具，不支持当前正式整包；不要将当前 Full 传给该脚本。
 
 需要分别烧录 Full 和 Boot State 时，可先生成 `TopFlyingWing_BootState.bin`：
 
@@ -60,14 +61,14 @@ python .\tools\test_boot_v2_contract.py
 python .\tools\make_bootstate.py `
   --app .\build\app\TopFlyingWing_App.bin `
   --output .\build\app\TopFlyingWing_BootState.bin `
-  --version top-flying-wing-1.2.0-dev
+  --version top-flying-wing-1.1.8
 ```
 
 Boot State 固定烧录到 `0x0803E800`，总长 4 KiB，不能烧到 `0x08000000`。
 
-上述脚本默认构建 `top-flying-wing-1.1.6`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。打包先生成完整临时制品，成功后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
+上述脚本默认构建 `top-flying-wing-1.1.8`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 及本次 App 生成匹配 Boot State，合成为维修用 Full 包。打包先生成完整临时制品，通过 `verify_release.py` 后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
 
-App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。Full 只拼接到 App 实际末尾，不包含配置页和 Boot State。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
+App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。正式 Full 长度固定为 260096 字节，包含 Boot、App 和匹配的 State A/B 区域，末地址为 `0x0803F7FF`，不包含配置页。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
 
 通过调试器直接覆盖 App 时，若保留的 Boot State 仍记录旧镜像长度和 CRC，Boot 会拒绝启动新 App。必须同步写入由本次 App 生成的匹配 Boot State（`0x0803E800`，4 KiB，涵盖 A/B 两页），或使用上述现场烧录脚本清除两页状态后启动；不能仅凭 App 写入校验通过判断程序已运行。配置页 `0x0803F800` 不得擦除。
 

@@ -44,7 +44,7 @@ set(WL300D_CAN_BITRATE "500000" CACHE STRING "WL300D CAN1 bitrate (500000 or 250
 if(NOT WL300D_CAN_BITRATE MATCHES "^(500000|250000)$")
     message(FATAL_ERROR "WL300D_CAN_BITRATE must be 500000 or 250000")
 endif()
-set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.6" CACHE STRING "Top flying wing App firmware version")
+set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.8" CACHE STRING "Top flying wing App firmware version")
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)

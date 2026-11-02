@@ -378,6 +378,7 @@ static void test_pinch_cancels_queued_motion(void)
 }
 
 extern uint8_t test_ultrasonic_blocked;
+extern unsigned test_ultrasonic_prestart_warnings;
 static void test_ultrasonic_cancels_queued_and_rejects_held_commands(void)
 {
     reset_all();ota_busy=1;
@@ -390,7 +391,7 @@ static void test_ultrasonic_cancels_queued_and_rejects_held_commands(void)
     assert(!g_tx_count && code()==4003);
     reset_all();test_ultrasonic_blocked=1;
     request("during-sonar","ascend");
-    assert(!g_tx_count && code()==4003);
+    assert(!g_tx_count && code()==4003 && test_ultrasonic_prestart_warnings==1);
     test_ultrasonic_blocked=0;pump();
     assert(!g_tx_count); /* A rejected request is never queued for later movement. */
 }

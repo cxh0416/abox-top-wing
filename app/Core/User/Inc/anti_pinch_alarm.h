@@ -16,8 +16,8 @@ typedef struct
 } AntiPinchAlarm;
 
 void AntiPinchAlarm_Init(AntiPinchAlarm* alarm);
-/* Alarm follows debounced contact, then remains on for 1000 ms after release.
- * stable_pressed remains the contact state, independent of the alarm tail. */
+/* Alarm follows debounced contact, then remains on for 1000 ms from the
+ * physical release edge. stable_pressed is independent of the alarm tail. */
 uint8_t AntiPinchAlarm_Update(AntiPinchAlarm* alarm, uint32_t now, uint8_t pressed);
 
 #endif

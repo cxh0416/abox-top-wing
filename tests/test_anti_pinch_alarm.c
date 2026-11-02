@@ -23,8 +23,8 @@ int main(void)
     assert(AntiPinchAlarm_Update(&alarm, 60029U, 0U));
     assert(AntiPinchAlarm_Update(&alarm, 60030U, 0U));
     assert(!alarm.stable_pressed);
-    assert(AntiPinchAlarm_Update(&alarm, 61029U, 0U));
-    assert(!AntiPinchAlarm_Update(&alarm, 61030U, 0U));
+    assert(AntiPinchAlarm_Update(&alarm, 61009U, 0U));
+    assert(!AntiPinchAlarm_Update(&alarm, 61010U, 0U));
     assert(!AntiPinchAlarm_Update(&alarm, 70000U, 0U));
 
     /* Short glitches do not change the stable state. */
@@ -40,8 +40,8 @@ int main(void)
     assert(AntiPinchAlarm_Update(&alarm, wrap + 1010U, 0U));
     assert(AntiPinchAlarm_Update(&alarm, wrap + 1030U, 0U));
     assert(!alarm.stable_pressed);
-    assert(AntiPinchAlarm_Update(&alarm, wrap + 2029U, 0U));
-    assert(!AntiPinchAlarm_Update(&alarm, wrap + 2030U, 0U));
+    assert(AntiPinchAlarm_Update(&alarm, wrap + 2009U, 0U));
+    assert(!AntiPinchAlarm_Update(&alarm, wrap + 2010U, 0U));
 
     /* Repress during the tail keeps alarm on; the next release gets a full tail. */
     AntiPinchAlarm_Init(&alarm);
@@ -54,7 +54,7 @@ int main(void)
     assert(AntiPinchAlarm_Update(&alarm, 2000U, 1U));
     AntiPinchAlarm_Update(&alarm, 2010U, 0U);
     assert(AntiPinchAlarm_Update(&alarm, 2030U, 0U));
-    assert(AntiPinchAlarm_Update(&alarm, 3029U, 0U));
-    assert(!AntiPinchAlarm_Update(&alarm, 3030U, 0U));
+    assert(AntiPinchAlarm_Update(&alarm, 3009U, 0U));
+    assert(!AntiPinchAlarm_Update(&alarm, 3010U, 0U));
     return 0;
 }

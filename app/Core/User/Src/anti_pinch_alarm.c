@@ -19,7 +19,7 @@ uint8_t AntiPinchAlarm_Update(AntiPinchAlarm* alarm, uint32_t now, uint8_t press
         (uint32_t)(now - alarm->raw_since) >= ANTI_PINCH_DEBOUNCE_MS)
     {
         alarm->stable_pressed = alarm->raw_pressed;
-        if (!alarm->stable_pressed) alarm->released_at = now;
+        if (!alarm->stable_pressed) alarm->released_at = alarm->raw_since;
     }
     if (alarm->stable_pressed) alarm->alarm_active = 1U;
     else if (alarm->alarm_active && (uint32_t)(now - alarm->released_at) >= ANTI_PINCH_ALARM_TAIL_MS)

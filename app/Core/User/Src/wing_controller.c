@@ -80,7 +80,9 @@ static uint8_t ultrasonic_near_retraction_suppressed(void)
 
 static void sync_ultrasonic_suppression(void)
 {
-    UltrasonicBoard_SetAlarmSuppressed(ultrasonic_near_retraction_suppressed());
+    uint8_t near = ultrasonic_near_retraction_suppressed();
+    if (near) UltrasonicBoard_ClearAlarmHold();
+    UltrasonicBoard_SetAlarmSuppressed((uint8_t)(g_session.state == SESSION_IDLE || near));
 }
 
 static uint8_t pinch_backoff_active(void)
@@ -94,8 +96,7 @@ static uint8_t anti_pinch_scope_eligible(void)
 {
     const WingSnapshot* snapshot = &g_state.snapshot;
     return snapshot->have_position &&
-           snapshot->motion_state == WING_MOTION_DESCENDING &&
-           snapshot->position_mm <= WING_ANTI_PINCH_MAX_MM;
+           snapshot->motion_state == WING_MOTION_DESCENDING;
 }
 
 static void sync_anti_pinch_scope(void)
@@ -291,13 +292,28 @@ static void stop_failed(uint16_t code)
 
 uint8_t WingController_IsUltrasonicBlocked(void)
 {
-    if (ultrasonic_near_retraction_suppressed()) return 0U;
-    return UltrasonicBoard_MotionBlocked(HAL_GetTick());
+    return UltrasonicBoard_ObstacleActive(HAL_GetTick());
+}
+
+uint8_t WingController_RejectRemoteStartForUltrasonic(void)
+{
+    uint32_t irq = __get_PRIMASK();
+    uint8_t rejected = 0U;
+    __disable_irq();
+    if (g_session.state == SESSION_IDLE && WingController_IsUltrasonicBlocked())
+    {
+        UltrasonicBoard_StartPrestartWarning(HAL_GetTick());
+        rejected = 1U;
+    }
+    __set_PRIMASK(irq);
+    if (rejected) APP_LOGW("SONAR", "prestart obstacle: 2s warning, movement rejected");
+    return rejected;
 }
 
 static void ultrasonic_stop(uint32_t now)
 {
-    if (ultrasonic_near_retraction_suppressed())
+    if (g_session.state == SESSION_IDLE ||
+        ultrasonic_near_retraction_suppressed())
     {
         sync_ultrasonic_suppression();
         return;
@@ -329,7 +345,9 @@ void WingController_UltrasonicStop(void)
 
 static uint8_t enforce_ultrasonic_stop(uint32_t now)
 {
-    if (!pinch_backoff_active() && WingController_IsUltrasonicBlocked() &&
+    if (!pinch_backoff_active() && g_session.state != SESSION_IDLE &&
+        !ultrasonic_near_retraction_suppressed() &&
+        WingController_IsUltrasonicBlocked() &&
         g_session.state >= SESSION_WAIT_RD1 && g_session.state <= SESSION_RUNNING)
     {
         ultrasonic_stop(now);
@@ -542,9 +560,10 @@ static uint16_t controller_request(WingAction action, const char* request_id)
         return begin_stop(STOP_USER, request_id, now) ? 0U : 5001U;
     }
 
-    if (g_pinch.phase != PINCH_NONE || g_pinch_pressed || WingController_IsUltrasonicBlocked()) return 4003U;
+    if (g_pinch.phase != PINCH_NONE || g_pinch_pressed) return 4003U;
     code = WingState_AdmissionCode(&g_state, action);
     if (code) return code;
+    if (WingController_RejectRemoteStartForUltrasonic()) return 4003U;
     clear_session();
     g_session.state = SESSION_WAIT_RD1;
     g_session.action = action;

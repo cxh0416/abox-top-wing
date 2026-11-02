@@ -15,6 +15,7 @@ extern GPIO_TypeDef test_gpioa, test_gpiob, test_gpioc, test_gpiod;
 #define GPIO_PIN_0 (1U << 0)
 #define GPIO_PIN_1 (1U << 1)
 #define GPIO_PIN_2 (1U << 2)
+#define GPIO_PIN_3 (1U << 3)
 #define GPIO_PIN_4 (1U << 4)
 #define GPIO_PIN_5 (1U << 5)
 #define GPIO_PIN_6 (1U << 6)

@@ -6,7 +6,7 @@ void UltrasonicAlarm_Init(UltrasonicAlarm* state) { memset(state, 0, sizeof(*sta
 uint8_t UltrasonicAlarm_Update(UltrasonicAlarm* state, uint32_t now)
 {
     if (!state->seen) return 0U;
-    /* User-selected policy: silence is allowed to end the sonar alarm.
+    /* User-selected policy: clear frames or silence keep the tail for 2 s.
      * This does not establish that the module is online or the path is clear. */
     if (state->active &&
         ((uint32_t)(now - state->last_rx) >= ULTRASONIC_SILENCE_MS ||
@@ -24,14 +24,11 @@ uint8_t UltrasonicAlarm_OnFrame(UltrasonicAlarm* state, uint32_t now,
     uint8_t mask = 0U;
     if (id != WL300D_CAN_ID || !extended || remote || length != 8U || !data) return 0U;
     (void)UltrasonicAlarm_Update(state, now);
-    /*
-     * The vendor uses both 0x00 and 0xFF to mean that a channel has no valid
-     * obstacle distance. 0x00 is also emitted continuously by the field
-     * module when all probes are clear, so treating it as an obstacle makes
-     * the shared alarm output stay on indefinitely.
-     */
+    /* The installed module reports no valid target as either 0x00 or 0xFF.
+     * Targets in its blind zone are intentionally treated as no obstacle. */
     for (uint8_t i = 0U; i < 8U; ++i)
-        if (data[i] != 0x00U && data[i] != 0xFFU) mask |= (uint8_t)(1U << i);
+        if (data[i] != 0x00U && data[i] != 0xFFU)
+            mask |= (uint8_t)(1U << i);
     state->seen = 1U;
     state->last_rx = now;
     state->obstacle_mask = mask;

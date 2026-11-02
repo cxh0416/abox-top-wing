@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-/* Call once after MX_GPIO_Init. PA7 is active high; PA0 enables DC power. */
+/* Call once after MX_GPIO_Init. PA7 is active high via the optocoupler,
+ * with no internal pull; PA0 enables DC power. */
 void AntiPinchBoard_Init(void);
 /* Controller-gated motion range; disabled input produces no alarm or event. */
 void AntiPinchBoard_SetScopeEnabled(uint8_t enabled);

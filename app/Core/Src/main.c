@@ -218,6 +218,11 @@ int main(void)
     if (!communication_ok)
         APP_LOGE("APP", "communication initialization failed");
 
+    /* Keep PWR12V_OUT2/3 enabled after local initialization, even offline.
+     * PA1/PA2 drive active-high power switches; OUT1 remains alarm-controlled. */
+    HAL_GPIO_WritePin(PVIN_OUT2_GPIO_Port, PVIN_OUT2_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(PVIN_OUT3_GPIO_Port, PVIN_OUT3_Pin, GPIO_PIN_SET);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */

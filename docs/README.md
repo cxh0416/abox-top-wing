@@ -3,7 +3,7 @@
 ## 公共业务协议
 
 - [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md)：公共报文、Topic、能力声明、QoS、有效期、幂等和状态同步规则。
-- [A-BOX 飞翼设备业务协议 V4](protocols/A-BOX飞翼设备业务协议-V4.0.md)：`wing 1.0` 的升降、停止、完整状态和位置采样接口。
+- [A-BOX 飞翼设备业务协议 V4](https://github.com/cxh0416/abox-top-wing/blob/protocols/docs/protocols/A-BOX飞翼设备业务协议-V4.0.md)：`wing 1.0` 的升降、停止、完整状态和位置采样接口。
 - 现有 V3 对接：[公共 MQTT V3](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V3.0.md)、[飞翼业务 V3](protocols/A-BOX飞翼设备业务协议-V3.0.md)。
 
 飞翼设备公共业务对接方只需阅读对应版本的公共 MQTT 协议和飞翼业务协议。

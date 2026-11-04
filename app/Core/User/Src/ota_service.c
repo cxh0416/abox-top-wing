@@ -7,6 +7,7 @@
 #include "app_version.h"
 #include "board_config.h"
 #include "boot_cfg.h"
+#include "mqtt_app.h"
 #include "mqtt_core.h"
 #include "mqtt_runtime.h"
 #include "mqtt_v4_store.h"
@@ -29,6 +30,14 @@ static void event(Ec800AtEvent_t e,const uint8_t*d,uint16_t n,void*u){OtaAdapter
 static int events(void*c,ABoxBootV2AtEventFn f,void*u){OtaAdapter_t*a=c;a->events=f;a->events_user=u;return EC800_AT_RegisterUrcHandler(a->at,EC800_AT_OWNER_OTA,event,a);}
 static uint8_t mqtt_client(void*c){(void)c;return MQTT_Core_ClientIndex();}
 static int mqtt_stop(void*c,uint32_t n){(void)c;return MqttRuntime_StopFirst(n);}
+static int may_start_seed(void*c)
+{
+ (void)c;
+ /* Wait for first enrollment to commit and for MQTT to connect. A maintenance
+  * credential trial must also finish before background seeding stops MQTT. */
+ return BoardConfig_HasMqttCredentials() && MQTT_Core_IsReady() &&
+        !MQTT_App_IsMqttConfigTrialActive();
+}
 static int borrow(void*c){(void)c;return MQTT_Core_BorrowWorkspace();}
 static void release(void*c){(void)c;MQTT_Core_ReturnWorkspace();}
 static void pause(void*c,uint8_t p){(void)c;MQTT_Core_SetPaused(p);}
@@ -40,7 +49,7 @@ void OtaService_Init(Ec800AtCore_t *at)
  static ABoxBootV2AppPort p;static ABoxBootV2AppConfig c;static const ABoxBootV2Layout layout={BOOT_STATE_A_ADDR,BOOT_STATE_B_ADDR,BOOT_STATE_PAGE_SIZE,APP_START_ADDR,APP_END_ADDR,0x20000000U,0x20010000U};extern uint8_t __app_image_end;
  memset(&g_adapter,0,sizeof(g_adapter));g_adapter.at=at;memset(&p,0,sizeof(p));p.context=&g_adapter;p.tick_ms=tick;p.submit=submit;p.send_payload=send;p.begin_raw_read=raw;p.has_pending=pending;p.is_active=active;p.cancel=cancel;p.register_events=events;p.mqtt_pause=pause;p.log=logline;p.transfer_buffer=g_ota_transfer_buffer;p.transfer_buffer_size=sizeof(g_ota_transfer_buffer);p.rx_overflow_count=overflow;
  memset(&c,0,sizeof(c));c.ota_origin="https://ota.zxwl.ntiov.com:20443";c.revision_product="top_flying_wing";c.artifact_name="top_flying_wing_app.bin";c.version_prefix="top-flying-wing-";c.running_version=TopFlyingWing_AppFwVersion();c.ca_pem=(const uint8_t*)g_ota_ca_pem;c.ca_pem_length=(uint32_t)(sizeof(g_ota_ca_pem)-1U);c.app_start_addr=APP_START_ADDR;c.app_size=(uint32_t)(&__app_image_end-(uint8_t*)APP_START_ADDR);c.app_max_size=APP_MAX_SIZE;
- p.mqtt_client_index=mqtt_client;p.mqtt_stop=mqtt_stop;p.workspace_borrow=borrow;p.workspace_return=release;
+ p.mqtt_client_index=mqtt_client;p.mqtt_stop=mqtt_stop;p.workspace_borrow=borrow;p.workspace_return=release;p.may_start_seed=may_start_seed;
  (void)ABoxBootV2_StateBindLayout(&layout);if(!ABoxBootV2App_Init(&p,&c))APP_LOGE("OTA","initialization failed");
 }
 uint8_t* OtaService_IdemWorkspace(void) { return g_ota_transfer_buffer; }
@@ -53,14 +62,9 @@ void OtaService_ReleaseIdemWorkspace(void) { g_idem_workspace_borrowed = 0U; }
 uint8_t OtaService_BeginProvisioning(void){return !g_idem_workspace_borrowed && (uint8_t)ABoxBootV2App_BeginProvisioning();}
 void OtaService_Task(void)
 {
- /* With saved credentials, let the initial MQTT connection pass WAIT_CA
-  * before local seeding asks it to stop. Starting the seed first makes OTA
-  * busy, which itself prevents WAIT_CA from advancing. Active OTA and
-  * provisioning must always continue, including while disconnected. */
+ /* The common service gates only new background seeds; active OTA and
+  * provisioning continue while MQTT is disconnected. */
  if (g_idem_workspace_borrowed) return;
- if (ABoxBootV2App_IsProvisioned() && !ABoxBootV2App_IsBusy() &&
-     strcmp(ABoxBootV2App_Phase(), "IDLE") == 0 &&
-     BoardConfig_HasMqttCredentials() && !MQTT_Core_IsReady()) return;
  ABoxBootV2App_Task();
 }
 uint8_t OtaService_IsProvisioned(void){return(uint8_t)ABoxBootV2App_IsProvisioned();}uint8_t OtaService_IsReady(void){return(uint8_t)ABoxBootV2App_IsReady();}uint8_t OtaService_IsBusy(void){return(uint8_t)ABoxBootV2App_IsBusy();}

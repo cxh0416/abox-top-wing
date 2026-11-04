@@ -6,9 +6,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+
+def product_protocol():
+    """Read the shared protocol ref; fetch origin/protocols when updating it."""
+    import subprocess
+    path = "docs/protocols/A-BOX飞翼设备业务协议-V4.0.md"
+    branch = subprocess.check_output(["git", "-C", str(ROOT), "branch", "--show-current"], text=True).strip()
+    if branch == "protocols":
+        return (ROOT / path).read_text(encoding="utf-8")
+    try:
+        raw = subprocess.check_output(["git", "-C", str(ROOT), "show", "refs/remotes/origin/protocols:" + path], stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError("Run git fetch origin protocols:refs/remotes/origin/protocols to obtain the shared protocol") from exc
+    return raw.decode("utf-8")
+
+
 def main() -> None:
     path = ROOT / "docs/protocols/A-BOX飞翼设备业务协议-V4.0.md"
-    text = path.read_text(encoding="utf-8")
+    text = product_protocol()
     blocks = re.findall(r"```json\s*(.*?)\s*```", text, re.S)
     assert blocks, "no public V4 examples"
     fields = {"motionState", "activeAction", "positionMm", "topLimitMm", "bottomLimitMm",

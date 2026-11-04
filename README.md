@@ -18,7 +18,7 @@
 - 内部运维：设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA，只供 OTA 平台使用。
 - 不支持：格口映射、试开通道、锁板、RS485 和旧桌面上位机协议。
 
-V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md) 和 [A-BOX 飞翼设备业务协议 V4](docs/protocols/A-BOX飞翼设备业务协议-V4.0.md)，采用单实例 `wing 1.0`，只定义升降、停止、完整状态和位置采样。
+V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md) 和 [A-BOX 飞翼设备业务协议 V4](https://github.com/cxh0416/abox-top-wing/blob/protocols/docs/protocols/A-BOX飞翼设备业务协议-V4.0.md)，采用单实例 `wing 1.0`，只定义升降、停止、完整状态和位置采样。
 
 `top-flying-wing-1.1.0` 使用公共 V4；旧 V3 报文和旧控制 Topic 不再作为本构建的业务入口。现有 V3 设备继续按 [飞翼业务 V3](docs/protocols/A-BOX飞翼设备业务协议-V3.0.md) 对接，平台按实际心跳的 `version` 区分。
 

@@ -6,6 +6,7 @@
 #include "anti_pinch_board.h"
 #include "main.h"
 #include "wing_protocol.h"
+#include "wing_power.h"
 #include "ultrasonic_board.h"
 
 #define RESULT_QUEUE_DEPTH 4U
@@ -23,7 +24,8 @@ typedef enum
     SESSION_RUNNING,
     SESSION_WAIT_STOP_ACK,
     SESSION_WAIT_STOP_STATUS,
-    SESSION_FAULT
+    SESSION_FAULT,
+    SESSION_WAIT_POWER_STATUS
 } SessionState;
 
 typedef enum { QUERY_NONE = 0, QUERY_RD, QUERY_RL } ExpectedQuery;
@@ -43,6 +45,7 @@ typedef struct
     uint8_t conflict_samples;
     uint8_t direction_result_sent;
     uint8_t stop_command_sent;
+    uint8_t power_off_check;
     char direction_request_id[65];
     char stop_request_id[65];
 } WingSession;
@@ -82,7 +85,7 @@ static void sync_ultrasonic_suppression(void)
 {
     uint8_t near = ultrasonic_near_retraction_suppressed();
     if (near) UltrasonicBoard_ClearAlarmHold();
-    UltrasonicBoard_SetAlarmSuppressed((uint8_t)(g_session.state == SESSION_IDLE || near));
+    UltrasonicBoard_SetAlarmSuppressed((uint8_t)(g_session.state == SESSION_IDLE || g_session.power_off_check || near));
 }
 
 static uint8_t pinch_backoff_active(void)
@@ -167,6 +170,7 @@ static void push_result(const char* request_id, WingAction action, uint16_t code
     g_results[tail].code = code;
     g_results[tail].accepted = code == 200U ? 1U : 0U;
     g_results[tail].snapshot = g_state.snapshot;
+    g_results[tail].observed_tick = HAL_GetTick();
     g_results[tail].stop_confirmed = action == WING_ACTION_STOP && code == 200U &&
         g_state.snapshot.status_fresh && !g_state.raw_moving && !g_state.snapshot.fault_code;
     g_result_count++;
@@ -549,9 +553,11 @@ static uint16_t controller_request(WingAction action, const char* request_id)
     uint32_t now = HAL_GetTick();
     uint16_t code;
     if (!request_id || !request_id[0] || action == WING_ACTION_NONE) return 4001U;
+    if (!WingPower_IsOn()) return 5002U;
 
     if (action == WING_ACTION_STOP)
     {
+        if (g_session.power_off_check) fail_direction(4003U, WING_CONTROL_OWNER_NONE);
         /* An explicit operator stop cancels any automatic upward continuation. */
         if (g_pinch.phase != PINCH_NONE) g_pinch.phase = PINCH_FINAL_STOP;
         /* Idle also needs feedback confirmation for an explicit stop. */
@@ -587,6 +593,35 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
     uint16_t code;
     __disable_irq();
     code = controller_request(action, request_id);
+    __set_PRIMASK(irq);
+    return code;
+}
+
+uint16_t WingController_CheckPowerOff(const char* request_id)
+{
+    uint32_t irq = __get_PRIMASK();
+    uint16_t code = 0U;
+    uint32_t now = HAL_GetTick();
+    __disable_irq();
+    if (!request_id || !request_id[0]) code = 4001U;
+    else if (!WingPower_IsOn()) code = 5002U;
+    else if (g_session.state != SESSION_IDLE || g_pinch.phase != PINCH_NONE || g_pinch_pressed) code = 4003U;
+    else
+    {
+        clear_session();
+        g_session.state = SESSION_WAIT_RD1;
+        g_session.power_off_check = 1U;
+        g_session.phase_tick = now;
+        copy_id(g_session.direction_request_id, request_id);
+        WingState_InvalidateLimits(&g_state);
+        WingState_SetSession(&g_state, WING_CAN_SESSION_PREFLIGHT, WING_PHASE_CHECKING_MOTION,
+                             WING_CONTROL_OWNER_NONE);
+        if (!send_query(QUERY_RD, now))
+        {
+            finish_idle(WING_CONTROL_OWNER_NONE);
+            code = 5001U;
+        }
+    }
     __set_PRIMASK(irq);
     return code;
 }
@@ -629,7 +664,7 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
     if (header.IDE != CAN_ID_EXT ||
         !WingProtocol_Decode(header.ExtId, (uint8_t)header.DLC, data, &msg)) return;
     now = HAL_GetTick();
-    if (enforce_ultrasonic_stop(now)) return;
+    if (!g_session.power_off_check && enforce_ultrasonic_stop(now)) return;
     if (g_session.state != SESSION_WAIT_STOP_ACK && g_session.state != SESSION_WAIT_STOP_STATUS &&
         pinch_receive(&msg, now)) return;
 
@@ -668,6 +703,18 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
             fail_direction(5003U, WING_CONTROL_OWNER_NONE);
             return;
         }
+        if (g_session.power_off_check)
+        {
+            if (msg.top_limit_mm <= msg.bottom_limit_mm)
+            {
+                fail_direction(5003U, WING_CONTROL_OWNER_NONE);
+                return;
+            }
+            g_session.state = SESSION_WAIT_POWER_STATUS;
+            g_session.phase_tick = now;
+            if (!send_query(QUERY_RD, now)) fail_direction(5001U, WING_CONTROL_OWNER_NONE);
+            return;
+        }
         WingState_SetSession(&g_state, WING_CAN_SESSION_PREFLIGHT, WING_PHASE_STARTING,
                              WING_CONTROL_OWNER_REMOTE);
         g_session.state = SESSION_WAIT_START_ACK;
@@ -684,6 +731,16 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
     WingState_ApplyFeedback(&g_state, now, msg.position_mm, msg.fault_code, msg.moving);
     sync_ultrasonic_suppression();
     sync_anti_pinch_scope();
+
+    if (g_session.state == SESSION_WAIT_POWER_STATUS)
+    {
+        uint16_t code = msg.fault_code ? 5005U :
+            (msg.moving || msg.position_mm < g_state.snapshot.bottom_limit_mm ||
+             (uint32_t)msg.position_mm > (uint32_t)g_state.snapshot.bottom_limit_mm + WING_ENDPOINT_TOLERANCE_MM) ? 4003U : 200U;
+        push_result(g_session.direction_request_id, WING_ACTION_NONE, code);
+        finish_idle(WING_CONTROL_OWNER_NONE);
+        return;
+    }
 
     if (g_session.state == SESSION_WAIT_RD1 || g_session.state == SESSION_WAIT_RD2)
     {
@@ -760,7 +817,7 @@ static void controller_task(uint32_t now)
     WingState_Tick(&g_state, now);
     sync_ultrasonic_suppression();
     sync_anti_pinch_scope();
-    if (enforce_ultrasonic_stop(now)) return;
+    if (!g_session.power_off_check && enforce_ultrasonic_stop(now)) return;
     if (g_session.state != SESSION_WAIT_STOP_ACK && g_session.state != SESSION_WAIT_STOP_STATUS &&
         pinch_task(now)) return;
 
@@ -779,7 +836,7 @@ static void controller_task(uint32_t now)
     }
 
     if ((g_session.state == SESSION_WAIT_RD1 || g_session.state == SESSION_WAIT_RD2 ||
-         g_session.state == SESSION_WAIT_RL) && g_session.expected_query != QUERY_NONE &&
+         g_session.state == SESSION_WAIT_RL || g_session.state == SESSION_WAIT_POWER_STATUS) && g_session.expected_query != QUERY_NONE &&
         (now - g_session.query_tick) >= WING_QUERY_TIMEOUT_MS)
     {
         fail_direction(g_session.expected_query == QUERY_RD ? 5002U : 5003U,

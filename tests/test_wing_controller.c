@@ -5,6 +5,7 @@
 
 #include "app_log.h"
 #include "wing_controller.h"
+#include "wing_power.h"
 
 CAN_HandleTypeDef hcan1 = { 1U };
 CAN_HandleTypeDef hcan2 = { 2U };
@@ -15,6 +16,12 @@ static uint16_t g_tx_count;
 static uint8_t g_rx[8];
 static uint8_t g_have_rx;
 static uint8_t g_fail_tx;
+static uint8_t g_power_output;
+void HAL_GPIO_WritePin(void *port, uint16_t pin, uint8_t value)
+{
+    assert(port == (void *)1 && pin == ((1U << 1) | (1U << 2)));
+    g_power_output = value;
+}
 extern uint8_t test_ultrasonic_blocked;
 extern uint8_t test_ultrasonic_suppressed;
 extern uint8_t test_anti_pinch_scope;
@@ -69,6 +76,7 @@ static void reset_controller(void)
     g_tx_count = 0U;
     g_have_rx = 0U;
     g_fail_tx = 0U;
+    WingPower_Init();
     WingController_Init();
 }
 

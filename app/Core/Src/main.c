@@ -48,6 +48,7 @@
 #include "abox_stm32_monotonic.h"
 #include "wing_app_service.h"
 #include "wing_controller.h"
+#include "wing_power.h"
 #include "anti_pinch_board.h"
 #include "ultrasonic_board.h"
 #include "mqtt_v4.h"
@@ -220,8 +221,7 @@ int main(void)
 
     /* Keep PWR12V_OUT2/3 enabled after local initialization, even offline.
      * PA1/PA2 drive active-high power switches; OUT1 remains alarm-controlled. */
-    HAL_GPIO_WritePin(PVIN_OUT2_GPIO_Port, PVIN_OUT2_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(PVIN_OUT3_GPIO_Port, PVIN_OUT3_Pin, GPIO_PIN_SET);
+    WingPower_Init();
 
   /* USER CODE END 2 */
 

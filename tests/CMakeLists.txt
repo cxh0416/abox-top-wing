@@ -34,6 +34,8 @@ wing_test(test_mqtt_v4 test_mqtt_v4.c ${USER}/Src/mqtt_v4.c ${USER}/Src/mqtt_v4_
 wing_test(test_time_sync test_time_sync.c ${USER}/Src/time_base.c ${USER}/Src/time_sync.c)
 target_sources(test_wing_controller PRIVATE stubs/ultrasonic_motion.c)
 target_sources(test_mqtt_v4 PRIVATE stubs/ultrasonic_motion.c)
+target_sources(test_wing_controller PRIVATE ${USER}/Src/wing_power.c)
+target_sources(test_mqtt_v4 PRIVATE ${USER}/Src/wing_power.c)
 wing_test(test_mqtt_trial test_mqtt_trial.c ${USER}/Src/mqtt_app.c)
 target_link_libraries(test_mqtt_trial PRIVATE abox::maintenance_service)
 wing_test(test_mqtt_runtime test_mqtt_runtime.c ${USER}/Src/mqtt_runtime.c)

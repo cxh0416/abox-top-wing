@@ -13,19 +13,23 @@
 #include "mqtt_core.h"
 #include "mqtt_v4_store.h"
 #include "time_base.h"
+#include "wing_power.h"
 
 #define CACHE_COUNT 12U
+typedef enum { POWER_NONE, POWER_ON, POWER_OFF } PowerAction;
 typedef struct
 {
     char id[65];
     char device_id[33];
     uint8_t digest[32];
     uint64_t timestamp;
+    uint64_t expires_at;
     uint32_t tick;
     uint16_t code;
     int8_t store_slot;
-    uint8_t valid, inflight, sync, retry_response, awaiting_dispatch, completing, cancelled;
+    uint8_t valid, inflight, sync, retry_response, awaiting_dispatch, completing, cancelled, has_expiry;
     WingAction action;
+    PowerAction power;
 } Request;
 static Request requests[CACHE_COUNT];
 static char response_buf[MQTT_APP_JSON_BUF_SZ];
@@ -37,8 +41,11 @@ static uint32_t ready_sequence, report_sequence;
 static uint64_t report_operation, boot_seed;
 static uint8_t report_pending, report_telemetry;
 static uint8_t retry_snapshot;
+typedef struct { char request_id[65]; uint32_t tick; uint8_t on; } PowerReport;
+static PowerReport power_reports[8];
+static uint8_t power_report_head, power_report_count, report_power_event, report_sync;
 static char sync_queue[2][65];
-static uint8_t sync_count;
+static uint8_t sync_count, sync_stage;
 static WingReport report;
 static uint32_t sample_tick;
 static char bound_device_id[33];
@@ -67,9 +74,17 @@ static int stopping(void* context, const cJSON* params)
     return cJSON_IsString(action) && !strcmp(action->valuestring, "stop");
 }
 
+static int power_action(void* context, const cJSON* params)
+{
+    (void)context;
+    return cJSON_IsNull(params);
+}
+
 static const ABoxMqttOperation operations[] = {
     {"wing_control", "wing", ABOX_MQTT_COMMAND_DISCRETE_ACTION, ABOX_MQTT_EXPIRY_REQUIRED, 5000U, direction, NULL, NULL},
-    {"wing_control", "wing", ABOX_MQTT_COMMAND_SAFETY_STOP, ABOX_MQTT_EXPIRY_FORBIDDEN, 0U, stopping, NULL, NULL}
+    {"wing_control", "wing", ABOX_MQTT_COMMAND_SAFETY_STOP, ABOX_MQTT_EXPIRY_FORBIDDEN, 0U, stopping, NULL, NULL},
+    {"power_on", "device_power", ABOX_MQTT_COMMAND_DISCRETE_ACTION, ABOX_MQTT_EXPIRY_REQUIRED, 5000U, power_action, NULL, NULL},
+    {"power_off", "device_power", ABOX_MQTT_COMMAND_SAFETY_STOP, ABOX_MQTT_EXPIRY_OPTIONAL, 0U, power_action, NULL, NULL}
 };
 
 void MQTT_V4_IdentityChanged(const char* id)
@@ -84,6 +99,12 @@ void MQTT_V4_IdentityChanged(const char* id)
         else memset(r, 0, sizeof(*r));
     }
     strcpy(bound_device_id, id);
+    sync_count = sync_stage = power_report_head = power_report_count = 0U;
+    if (report_sync || report_power_event)
+    {
+        report_pending = report_sync = report_power_event = 0U;
+        report_operation = 0U;
+    }
     /* Configuration changes are admitted only while control is idle. */
     while (WingController_TakeReport(&old_report)) { }
     while (WingController_TakeResult(&old_result)) { }
@@ -107,18 +128,43 @@ static const char* message(uint16_t code)
     }
 }
 
-static int encode_response(const char* id, uint16_t code, uint64_t timestamp, uint8_t sync)
+static int encode_response(const char* id, uint16_t code, uint64_t timestamp, uint8_t sync, PowerAction power)
 {
-    cJSON* result = sync && code == 200U ? cJSON_Parse("{\"expectedStates\":[{\"reportName\":\"wing_status\"}]}") : NULL;
-    if (sync && code == 200U && !result) return 0;
+    cJSON* result = sync && code == 200U ? cJSON_Parse("{\"expectedStates\":[{\"reportName\":\"wing_status\"},{\"reportName\":\"power_status\"}]}") : NULL;
+    if (code == 200U && power != POWER_NONE)
+    {
+        result = cJSON_CreateObject();
+        if (result && !cJSON_AddBoolToObject(result, "powerOutputOn", power == POWER_ON))
+        { cJSON_Delete(result); result = NULL; }
+    }
+    if (code == 200U && (sync || power != POWER_NONE) && !result) return 0;
     uint16_t encoded = ABoxCloudV4_Response(response_buf, sizeof(response_buf), timestamp, id, code, message(code), result);
     cJSON_Delete(result);
     return encoded == code;
 }
 
-static uint8_t respond(const char* id, uint16_t code, uint64_t timestamp, uint8_t sync)
+static uint8_t respond(const char* id, uint16_t code, uint64_t timestamp, uint8_t sync, PowerAction power)
 {
-    return encode_response(id, code, timestamp, sync) && MQTT_App_QueuePublicResponse(response_buf, id, code);
+    return encode_response(id, code, timestamp, sync, power) && MQTT_App_QueuePublicResponse(response_buf, id, code);
+}
+
+static void queue_power_report(const char* request_id, uint8_t on)
+{
+    uint8_t tail;
+    if (power_report_count == 8U)
+    {
+        /* Do not overwrite a report currently awaiting its QoS 1 receipt. */
+        if (report_power_event) return;
+        power_report_head = (uint8_t)((power_report_head + 1U) % 8U);
+        --power_report_count;
+    }
+    tail = (uint8_t)((power_report_head + power_report_count) % 8U);
+    power_reports[tail].request_id[0] = '\0';
+    if (request_id) strncpy(power_reports[tail].request_id, request_id, 64U);
+    power_reports[tail].request_id[64] = '\0';
+    power_reports[tail].on = on ? 1U : 0U;
+    power_reports[tail].tick = HAL_GetTick();
+    ++power_report_count;
 }
 
 static void replay_response(const char* response, const char* id)
@@ -161,13 +207,27 @@ static void complete(Request* r, uint16_t code)
         return;
     }
     r->inflight = 0U;
-    r->retry_response = !strcmp(r->device_id, g_mqtt_app_device_id) && !respond(r->id, code, r->timestamp, r->sync);
+    r->retry_response = !strcmp(r->device_id, g_mqtt_app_device_id) && !respond(r->id, code, r->timestamp, r->sync, r->power);
 }
 
 void MQTT_V4_CancelPendingMotion(void)
 {
     for (unsigned i = 0; i < CACHE_COUNT; ++i)
-        if (requests[i].awaiting_dispatch) requests[i].cancelled = 1U;
+        if (requests[i].awaiting_dispatch && requests[i].power == POWER_NONE) requests[i].cancelled = 1U;
+}
+
+static uint8_t power_off_pending(void)
+{
+    for (unsigned i = 0; i < CACHE_COUNT; ++i)
+        if (requests[i].inflight && !requests[i].completing && requests[i].power == POWER_OFF) return 1U;
+    return 0U;
+}
+
+static uint8_t power_request_pending(void)
+{
+    for (unsigned i = 0; i < CACHE_COUNT; ++i)
+        if (requests[i].inflight && !requests[i].completing && requests[i].power != POWER_NONE) return 1U;
+    return 0U;
 }
 
 void MQTT_V4_Task(void)
@@ -189,19 +249,28 @@ void MQTT_V4_Task(void)
         if (r->awaiting_dispatch && cache->entries[index].state == ABOX_IDEM_PREPARED)
         {
             ABoxClockSnapshot clock = TimeBase_GetSnapshot();
-            uint16_t code = r->cancelled ||
-                WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT ||
-                WingController_RejectRemoteStartForUltrasonic() ?
-                4003U : ABoxMqttIdem_TakeExecutable(cache, index, &clock);
+            uint16_t code = r->cancelled ? 4003U :
+                ABoxMqttIdem_TakeExecutable(cache, index, &clock);
             r->awaiting_dispatch = 0U;
-            if (code == 200U) code = WingController_Request(r->action, r->id);
+            if (code == 200U && r->power == POWER_ON)
+            {
+                WingPower_Set(1U);
+                queue_power_report(r->id, 1U);
+            }
+            else if (code == 200U)
+            {
+                if (power_off_pending() ||
+                    WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT ||
+                    WingController_RejectRemoteStartForUltrasonic()) code = 4003U;
+                else code = WingController_Request(r->action, r->id);
+            }
             if (code) complete(r, code);
         }
         if (r->completing)
         {
             if (cache->entries[index].state == ABOX_IDEM_PREPARED || cache->entries[index].state == ABOX_IDEM_DISPATCHED)
             {
-                if (encode_response(r->id, r->code, r->timestamp, 0U))
+                if (encode_response(r->id, r->code, r->timestamp, 0U, r->power))
                     (void)ABoxMqttIdem_Complete(cache, index, response_buf, strlen(response_buf));
             }
             const char* response = ABoxMqttIdem_Response(cache, index, NULL);
@@ -231,6 +300,7 @@ void MQTT_V4_HandleRequest(const char* text)
     uint16_t code, operation_error;
     uint8_t sync;
     WingAction action = WING_ACTION_NONE;
+    PowerAction power = POWER_NONE;
     int legacy;
     code = ABoxMqttRequest_Decode(&request, text, text ? strlen(text) : 0U, NULL, NULL);
     if (code != 200U) goto error;
@@ -238,7 +308,9 @@ void MQTT_V4_HandleRequest(const char* text)
     sync = !strcmp(request.command, "sync_state");
     if (operation)
     {
-        if (operation->classification == ABOX_MQTT_COMMAND_SAFETY_STOP) action = WING_ACTION_STOP;
+        if (!strcmp(request.command, "power_on")) power = POWER_ON;
+        else if (!strcmp(request.command, "power_off")) power = POWER_OFF;
+        else if (operation->classification == ABOX_MQTT_COMMAND_SAFETY_STOP) action = WING_ACTION_STOP;
         else if (operation->classification == ABOX_MQTT_COMMAND_DISCRETE_ACTION)
             action = !strcmp(cJSON_GetObjectItemCaseSensitive(request.params, "action")->valuestring, "ascend") ?
                 WING_ACTION_ASCEND : WING_ACTION_DESCEND;
@@ -246,10 +318,10 @@ void MQTT_V4_HandleRequest(const char* text)
     r = find(request.request_id);
     if (r && memcmp(r->digest, request.digest, sizeof(request.digest))) { code = 4006U; goto error; }
     if (r && r->inflight) goto done;
-    if (r && r->store_slot < 0 && action != WING_ACTION_STOP)
+    if (r && r->store_slot < 0 && action != WING_ACTION_STOP && power != POWER_OFF)
     {
         if (sync && r->code == 200U && !queue_sync(r->id)) { code = 4003U; goto error; }
-        r->retry_response = !respond(r->id, r->code, r->timestamp, r->sync);
+        r->retry_response = !respond(r->id, r->code, r->timestamp, r->sync, r->power);
         goto done;
     }
     /* Compatibility is read-only: the previous Flash reservations retain
@@ -258,7 +330,7 @@ void MQTT_V4_HandleRequest(const char* text)
     if (legacy > 0)
     {
         if (memcmp(saved.digest, request.digest, sizeof(request.digest))) { code = 4006U; goto error; }
-        if (legacy == 2) (void)respond(request.request_id, (uint16_t)saved.code, saved.timestamp, 0U);
+        if (legacy == 2) (void)respond(request.request_id, (uint16_t)saved.code, saved.timestamp, 0U, POWER_NONE);
         else { code = 4003U; goto error; }
         goto done;
     }
@@ -282,13 +354,15 @@ void MQTT_V4_HandleRequest(const char* text)
     }
     if (match == ABOX_IDEM_UNCERTAIN) { code = 4003U; goto error; }
     if (operation_error != 200U) { code = operation_error; goto error; }
-    if (action != WING_ACTION_STOP && !sync && (legacy < 0 || match == ABOX_IDEM_UNAVAILABLE))
+    if ((power == POWER_ON && power_request_pending()) || (power == POWER_OFF && power_off_pending()))
+    { code = 4003U; goto error; }
+    if (action != WING_ACTION_STOP && power != POWER_OFF && !sync && (legacy < 0 || match == ABOX_IDEM_UNAVAILABLE))
     { code = legacy < 0 || !cache || cache->failed ? 5001U : 4003U; goto error; }
     ABoxClockSnapshot clock = TimeBase_GetSnapshot();
     code = ABoxMqttRequest_CheckNew(&request, operation, &clock);
     if (code != 200U) goto error;
     if (!r) r = reserve();
-    if (!r && action == WING_ACTION_STOP)
+    if (!r && (action == WING_ACTION_STOP || power == POWER_OFF))
     {
         for (unsigned i = 0; i < CACHE_COUNT; ++i)
             if (!requests[i].inflight) { r = &requests[i]; break; }
@@ -297,9 +371,18 @@ void MQTT_V4_HandleRequest(const char* text)
     memset(r, 0, sizeof(*r));
     strcpy(r->id, request.request_id); memcpy(r->digest, request.digest, sizeof(request.digest));
     strcpy(r->device_id, g_mqtt_app_device_id);
-    r->valid = r->inflight = 1U; r->sync = sync; r->action = action; r->store_slot = -1; r->tick = HAL_GetTick();
+    r->valid = r->inflight = 1U; r->sync = sync; r->action = action; r->power = power;
+    r->expires_at = request.expires_at; r->has_expiry = request.has_expires_at; r->store_slot = -1; r->tick = HAL_GetTick();
     if (sync) { complete(r, queue_sync(r->id) ? 200U : 4003U); goto done; }
-    if (action == WING_ACTION_STOP)
+    if (power == POWER_OFF)
+    {
+        MQTT_V4_CancelPendingMotion();
+        for (unsigned i = 0; i < CACHE_COUNT; ++i)
+            if (requests[i].power == POWER_ON && requests[i].awaiting_dispatch) requests[i].cancelled = 1U;
+        if (!WingPower_IsOn()) { queue_power_report(r->id, 0U); complete(r, 200U); }
+        else { code = WingController_CheckPowerOff(r->id); if (code) complete(r, code); }
+    }
+    else if (action == WING_ACTION_STOP)
     {
         /* A stop also cancels an intention still waiting for durable storage.
          * It must never start later after this stop has completed. */
@@ -309,8 +392,9 @@ void MQTT_V4_HandleRequest(const char* text)
     }
     else
     {
-        if (WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT ||
-            WingController_RejectRemoteStartForUltrasonic())
+        if (power == POWER_NONE && (power_off_pending() || !WingPower_IsOn() ||
+            WingController_GetSnapshot()->can_session != WING_CAN_SESSION_IDLE_SILENT ||
+            WingController_RejectRemoteStartForUltrasonic()))
         { complete(r, 4003U); goto done; }
         code = ABoxMqttIdem_Begin(cache, key, request.digest, request.expires_at, &clock, &index);
         if (code != 200U) { complete(r, code); goto done; }
@@ -319,7 +403,7 @@ void MQTT_V4_HandleRequest(const char* text)
     }
     goto done;
 error:
-    if (request.request_id) (void)respond(request.request_id, code, TimeBase_GetReportedMs(), 0U);
+    if (request.request_id) (void)respond(request.request_id, code, TimeBase_GetReportedMs(), 0U, POWER_NONE);
 done:
     ABoxMqttRequest_Close(&request);
 }
@@ -332,6 +416,20 @@ void MQTT_V4_HandleResult(const WingControlResult* result)
     code = result->code;
     if (result->action == WING_ACTION_STOP && code == 200U && !result->stop_confirmed)
         code = result->snapshot.fault_code ? 5005U : 5003U;
+    if (r->power == POWER_OFF && code == 200U)
+    {
+        ABoxClockSnapshot clock = TimeBase_GetSnapshot();
+        const WingSnapshot* s = &result->snapshot;
+        code = r->cancelled || !s->status_fresh || !s->have_position || !s->have_limits ||
+            s->motion_state != WING_MOTION_STOPPED || s->at_endpoint != WING_ENDPOINT_BOTTOM ||
+            HAL_GetTick() - result->observed_tick > WING_ACTIVE_FEEDBACK_TIMEOUT_MS ?
+            4003U : (r->has_expiry ? ABoxMqttV4_CheckExpiry(&clock, r->expires_at) : 200U);
+        if (code == 200U)
+        {
+            WingPower_Set(0U);
+            queue_power_report(r->id, 0U);
+        }
+    }
     complete(r, code);
 }
 
@@ -388,11 +486,29 @@ static int encode_state(const WingSnapshot* snapshot, const char* request_id, ui
     return ok;
 }
 
+static int encode_power_state(const char* request_id, uint8_t on, uint32_t captured_tick)
+{
+    char id[97];
+    cJSON* payload = cJSON_CreateObject();
+    int ok = 0;
+    if (!payload) return 0;
+    if (!boot_seed) boot_seed = TimeBase_GetMs() ^ (ABox_PortGetMonotonicMs() << 16U) ^ ((uint64_t)HAL_GetUIDw0() << 32U) ^ HAL_GetUIDw1();
+    snprintf(id, sizeof(id), "%08lX%08lX-%lu", (unsigned long)(boot_seed >> 32U), (unsigned long)boot_seed, (unsigned long)++report_sequence);
+    const ABoxCloudV4Report header = {.report_id = id, .type = "state", .name = "power_status",
+        .request_id = request_id && *request_id ? request_id : NULL, .timestamp = captured_time(captured_tick)};
+    if (cJSON_AddBoolToObject(payload, "powerOutputOn", on))
+        ok = ABoxCloudV4_Report(report_buf, sizeof(report_buf), &header, payload);
+    cJSON_Delete(payload);
+    return ok;
+}
+
 static int publish_meta(ABoxCloudJobKind kind, uint64_t* operation)
 {
-    const ABoxCloudV4Profile enabled = {profile.name, profile.version, NULL, 0U};
+    const ABoxCloudV4Profile enabled[] = {
+        {profile.name, profile.version, NULL, 0U}, {"device_power", "1.0", NULL, 0U}
+    };
     int encoded = kind == ABOX_CLOUD_JOB_MANIFEST ?
-        ABoxCloudV4_Manifest(meta_buf, sizeof(meta_buf), TimeBase_GetReportedMs(), TopFlyingWing_AppFwVersion(), &enabled, 1U, 0) :
+        ABoxCloudV4_Manifest(meta_buf, sizeof(meta_buf), TimeBase_GetReportedMs(), TopFlyingWing_AppFwVersion(), enabled, 2U, 0) :
         ABoxCloudV4_Heartbeat(meta_buf, sizeof(meta_buf), TimeBase_GetReportedMs(), TopFlyingWing_AppFwVersion(), NULL);
     int ok = encoded && MQTT_Core_PublishExTracked(kind == ABOX_CLOUD_JOB_MANIFEST ? g_mqtt_app_manifest_topic : g_mqtt_app_heartbeat_topic,
         meta_buf, kind == ABOX_CLOUD_JOB_MANIFEST ? 1U : 0U, kind == ABOX_CLOUD_JOB_MANIFEST ? 1U : 0U, operation);
@@ -403,7 +519,8 @@ static int publish_meta(ABoxCloudJobKind kind, uint64_t* operation)
 void MQTT_V4_ResetReports(void)
 {
     ABoxCloudBootstrap_Init(&bootstrap);
-    report_pending = report_telemetry = report_is_heartbeat = retry_snapshot = 0U; report_operation = 0U; ready_sequence = 0U; sync_count = 0U;
+    report_pending = report_telemetry = report_is_heartbeat = retry_snapshot = 0U; report_operation = 0U; ready_sequence = 0U; sync_count = sync_stage = 0U;
+    power_report_head = power_report_count = report_power_event = report_sync = 0U;
 }
 
 uint8_t MQTT_V4_AnnouncementReady(void) { return bootstrap.ready && !ABoxCloudBootstrap_Active(&bootstrap); }
@@ -414,18 +531,18 @@ void MQTT_V4_ReportTask(void)
     ABoxMqttReceiptStatus receipt;
     uint32_t now = HAL_GetTick();
     for (unsigned i = 0; i < CACHE_COUNT; ++i)
-        if (requests[i].retry_response && respond(requests[i].id, requests[i].code, requests[i].timestamp, requests[i].sync)) requests[i].retry_response = 0U;
+        if (requests[i].retry_response && respond(requests[i].id, requests[i].code, requests[i].timestamp, requests[i].sync, requests[i].power)) requests[i].retry_response = 0U;
     if (!MQTT_Core_IsReady())
     {
         ABoxCloudBootstrap_SetReady(&bootstrap, 0);
-        report_operation = 0U; report_pending = report_is_heartbeat = retry_snapshot = 0U;
+        report_operation = 0U; report_pending = report_is_heartbeat = retry_snapshot = report_power_event = report_sync = 0U;
         return;
     }
     if (ready_sequence != MQTT_Core_GetReadySeq())
     {
         if (ready_sequence) ABoxCloudBootstrap_NetworkChanged(&bootstrap);
         ready_sequence = MQTT_Core_GetReadySeq();
-        report_operation = 0U; report_pending = report_is_heartbeat = retry_snapshot = 0U;
+        report_operation = 0U; report_pending = report_is_heartbeat = retry_snapshot = report_power_event = report_sync = 0U;
     }
     ABoxCloudBootstrap_SetReady(&bootstrap, 1);
     if (bootstrap.in_flight)
@@ -434,6 +551,7 @@ void MQTT_V4_ReportTask(void)
         if (receipt == ABOX_MQTT_RECEIPT_PENDING) return;
         ABoxCloudJobKind completed = ABoxCloudBootstrap_Receipt(&bootstrap, bootstrap.generation, bootstrap.operation, receipt == ABOX_MQTT_RECEIPT_CONFIRMED);
         if (completed == ABOX_CLOUD_JOB_HEARTBEAT) g_mqtt_app_last_hb_ok_tick = now;
+        if (completed == ABOX_CLOUD_JOB_STATE) queue_power_report(NULL, WingPower_IsOn());
     }
     if (ABoxCloudBootstrap_Active(&bootstrap))
     {
@@ -455,7 +573,18 @@ void MQTT_V4_ReportTask(void)
         if (receipt == ABOX_MQTT_RECEIPT_PENDING) return;
         report_operation = 0U;
         if (report_is_heartbeat) { if (receipt == ABOX_MQTT_RECEIPT_CONFIRMED) g_mqtt_app_last_hb_ok_tick = now; report_is_heartbeat = 0U; }
-        else if (receipt == ABOX_MQTT_RECEIPT_CONFIRMED || report_telemetry) report_pending = 0U;
+        else if (receipt == ABOX_MQTT_RECEIPT_CONFIRMED || report_telemetry)
+        {
+            report_pending = 0U;
+            if (report_power_event && power_report_count)
+            { power_report_head = (uint8_t)((power_report_head + 1U) % 8U); --power_report_count; }
+            if (report_sync && sync_count)
+            {
+                if (!sync_stage) sync_stage = 1U;
+                else { sync_stage = 0U; if (--sync_count) strcpy(sync_queue[0], sync_queue[1]); }
+            }
+            report_power_event = report_sync = 0U;
+        }
     }
     if (MQTT_Core_IsPublishActive() || g_mqtt_app_resp_pending) return;
     if (now - g_mqtt_app_last_hb_tick >= MQTT_APP_HEARTBEAT_PERIOD_MS)
@@ -474,10 +603,20 @@ void MQTT_V4_ReportTask(void)
         }
         else if (sync_count)
         {
-            memset(&report, 0, sizeof(report)); WingController_CopySnapshot(&report.snapshot);
-            strcpy(report.request_id, sync_queue[0]); id = report.request_id;
-            if (!encode_state(&report.snapshot, id, 0U, now)) return;
-            if (--sync_count) strcpy(sync_queue[0], sync_queue[1]);
+            id = sync_queue[0];
+            if (sync_stage) { if (!encode_power_state(id, WingPower_IsOn(), now)) return; }
+            else
+            {
+                memset(&report, 0, sizeof(report)); WingController_CopySnapshot(&report.snapshot);
+                if (!encode_state(&report.snapshot, id, 0U, now)) return;
+            }
+            report_sync = 1U;
+        }
+        else if (power_report_count)
+        {
+            const PowerReport* p = &power_reports[power_report_head];
+            if (!encode_power_state(p->request_id, p->on, p->tick)) return;
+            report_power_event = 1U;
         }
         else if (WingController_TakeReport(&report))
         { if (!encode_state(&report.snapshot, report.request_id, 0U, report.tick)) { retry_snapshot = 1U; return; } }

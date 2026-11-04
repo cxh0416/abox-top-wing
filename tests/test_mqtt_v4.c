@@ -163,6 +163,15 @@ static void request(const char* id, const char* action)
         timestamp,id,action,!strcmp(action,"stop") ? "" : ",\"expiresAt\":",!strcmp(action,"stop") ? "" : expiry);
     MQTT_V4_HandleRequest(packet); pump();
 }
+static void power_request_with_expiry(const char* id, const char* action, int with_expiry)
+{
+    char packet[512];
+    snprintf(packet, sizeof(packet), "{\"version\":\"4.0\",\"timestamp\":1800000000000,\"data\":{\"requestId\":\"%s\",\"command\":\"power_%s\",\"params\":null%s}}", id, action,
+        with_expiry ? ",\"expiresAt\":1800000005000" : "");
+    MQTT_V4_HandleRequest(packet); pump();
+}
+static void power_request(const char* id, const char* action)
+{ power_request_with_expiry(id, action, !strcmp(action, "on")); }
 static void results(void)
 { WingControlResult result; while(WingController_TakeResult(&result)) MQTT_V4_HandleResult(&result); pump(); }
 static void finish_start(void)
@@ -275,13 +284,17 @@ static void test_capacity_preserves_protected_requests(void)
 static void test_bootstrap_sync_and_report_qos(void)
 {
     reset_all(); MQTT_V4_ReportTask(); assert(publish_count==1 && published[0].retain==1U && published[0].qos==1U);
-    assert(strstr(published[0].payload,"\"name\":\"wing\""));
+    assert(strstr(published[0].payload,"\"name\":\"wing\"") && strstr(published[0].payload,"\"name\":\"device_power\""));
     confirm_publish(); assert(publish_count==2 && strstr(published[1].topic,"heartbeat") && !published[1].qos);
     confirm_publish(); assert(publish_count==3 && strstr(published[2].payload,"wing_status") && !published[2].retain && published[2].qos==1);
     confirm_publish(); assert(MQTT_V4_AnnouncementReady());
+    assert(publish_count==4 && strstr(published[3].payload,"power_status"));
+    confirm_publish();
     MQTT_V4_HandleRequest("{\"version\":\"4.0\",\"timestamp\":1,\"data\":{\"requestId\":\"sync-1\",\"command\":\"sync_state\",\"params\":null}}");
-    assert(code()==200 && strstr(response,"expectedStates") && !g_tx_count);
+    assert(code()==200 && strstr(response,"expectedStates") && strstr(response,"power_status") && !g_tx_count);
     MQTT_V4_ReportTask(); assert(strstr(published[publish_count-1].payload,"\"requestId\":\"sync-1\""));
+    confirm_publish();
+    assert(strstr(published[publish_count-1].payload,"power_status") && strstr(published[publish_count-1].payload,"sync-1"));
     confirm_publish();
     request("position-up","ascend"); finish_start();
     for(unsigned i=0;i<12U;i++) { MQTT_V4_ReportTask(); if(publish_busy) confirm_publish(); }
@@ -396,8 +409,103 @@ static void test_ultrasonic_cancels_queued_and_rejects_held_commands(void)
     assert(!g_tx_count); /* A rejected request is never queued for later movement. */
 }
 
+static void power_check_to_limits(uint16_t pos)
+{
+    status(pos, 0U, 1U);
+    g_tick = 251U; WingController_Task(g_tick);
+    status(pos, 0U, 252U);
+}
+
+static void test_power_control(void)
+{
+    reset_all(); assert(WingPower_IsOn() && g_power_output == 1U);
+    power_request("power-off", "off");
+    assert(WingPower_IsOn() && count_command('R','D') == 1U && !response_count);
+    power_check_to_limits(10U);
+    limits(100U, 10U, 253U);
+    assert(WingPower_IsOn() && count_command('R','D') == 3U);
+    power_request("concurrent-on", "on"); assert(code()==4003 && WingPower_IsOn());
+    status(10U, 0U, 254U); results();
+    assert(code() == 200 && strstr(response,"\"powerOutputOn\":false") && !WingPower_IsOn() && g_power_output == 0U);
+    request("motion-when-off", "ascend"); assert(code() == 4003 && !count_command('U','P'));
+    power_request("power-on", "on"); assert(code() == 200 && strstr(response,"\"powerOutputOn\":true") && WingPower_IsOn() && g_power_output == 1U);
+    power_request("power-off", "off"); assert(WingPower_IsOn()); /* Safety off checks again. */
+    power_check_to_limits(10U); limits(100U,10U,253U); status(10U,0U,254U); results();
+    assert(code()==200 && !WingPower_IsOn());
+
+    reset_all(); power_request("not-closed", "off"); power_check_to_limits(50U);
+    limits(100U, 10U, 253U); status(50U, 0U, 254U); results();
+    assert(code() == 4003 && WingPower_IsOn());
+    reset_all(); power_request("moving", "off"); status(10U, 1U, 1U); results();
+    assert(code() == 4003 && WingPower_IsOn());
+    reset_all(); power_request("no-controller", "off");
+    g_tick = WING_QUERY_TIMEOUT_MS; WingController_Task(g_tick); results();
+    assert(code() == 5002 && WingPower_IsOn());
+    reset_all(); power_request("final-moving", "off"); power_check_to_limits(10U);
+    limits(100U, 10U, 253U); status(10U, 1U, 254U); results();
+    assert(code() == 4003 && WingPower_IsOn());
+    reset_all(); power_request("bad-limits", "off"); power_check_to_limits(10U);
+    limits(10U, 10U, 253U); results(); assert(code() == 5003 && WingPower_IsOn());
+    reset_all(); power_request("faulted", "off"); power_check_to_limits(10U);
+    limits(100U, 10U, 253U); status_with_fault(10U, 0U, 1U, 254U); results();
+    assert(code() == 5005 && WingPower_IsOn());
+    reset_all(); power_request("stale-feedback", "off"); power_check_to_limits(10U);
+    limits(100U, 10U, 253U); status(10U, 0U, 254U);
+    g_tick += WING_ACTIVE_FEEDBACK_TIMEOUT_MS + 1U; results();
+    assert(code() == 4003 && WingPower_IsOn());
+    reset_all(); power_request_with_expiry("expiry-before-cut", "off", 1); power_check_to_limits(10U);
+    limits(100U, 10U, 253U); status(10U, 0U, 254U); utc=1800000005000ULL; results();
+    assert(code() == 4005 && WingPower_IsOn());
+
+    reset_all(); trusted=0U; power_request("no-time", "on"); assert(code()==4003 && !g_tx_count);
+    reset_all(); trusted=0U; power_request("off-no-time", "off"); assert(count_command('R','D')==1U);
+    reset_all(); power_request_with_expiry("on-no-expiry", "on", 0); assert(code()==4001 && !g_tx_count);
+    MQTT_V4_HandleRequest("{\"version\":\"4.0\",\"timestamp\":1800000000000,\"data\":{\"requestId\":\"bad-params\",\"command\":\"power_off\",\"params\":{}}}");
+    assert(code()==4001 && !g_tx_count);
+    reset_all(); ota_busy=1U; power_request("queued-on", "on");
+    assert(!g_tx_count && !response_count);
+    power_request("off-during-storage", "off"); assert(count_command('R','D')==1U);
+    power_check_to_limits(10U); limits(100U,10U,253U); status(10U,0U,254U); results();
+    assert(code()==200 && !WingPower_IsOn());
+    ota_busy=0U; pump(); assert(code()==4003 && !WingPower_IsOn());
+    reset_all(); request("running-up", "ascend"); finish_start();
+    power_request("running-off", "off"); assert(code()==4003 && WingPower_IsOn());
+
+    reset_all(); power_request("cancel-for-stop", "off");
+    request("operator-stop", "stop"); results(); assert(code()==4003 && WingPower_IsOn());
+    ack(WING_ACTION_STOP, 1U); status(10U, 0U, 2U); results();
+    assert(code()==200 && WingPower_IsOn());
+}
+
+static void test_power_report(void)
+{
+    reset_all(); MQTT_V4_ReportTask();
+    confirm_publish(); confirm_publish(); confirm_publish();
+    assert(strstr(published[publish_count-1].payload,"power_status"));
+    confirm_publish();
+    power_request("report-off", "off"); power_check_to_limits(10U);
+    limits(100U,10U,253U); status(10U,0U,254U); results();
+    MQTT_V4_ReportTask();
+    assert(strstr(published[publish_count-1].payload,"\"reportName\":\"power_status\"") &&
+           strstr(published[publish_count-1].payload,"\"requestId\":\"report-off\"") &&
+           strstr(published[publish_count-1].payload,"\"powerOutputOn\":false"));
+    receipts[publish_count]=ABOX_MQTT_RECEIPT_FAILED; publish_busy=0U; MQTT_V4_ReportTask();
+    assert(strstr(published[publish_count-1].payload,"report-off"));
+    confirm_publish();
+}
+
 int main(int argc, char** argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--describe-power"))
+    {
+        reset_all(); MQTT_V4_ReportTask();
+        confirm_publish(); confirm_publish(); confirm_publish(); confirm_publish();
+        power_request("power-wire", "off"); power_check_to_limits(10U);
+        limits(100U,10U,253U); status(10U,0U,254U); results();
+        MQTT_V4_ReportTask();
+        printf("{\"response\":%s,\"report\":%s}\n", response, published[publish_count-1].payload);
+        return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--describe"))
     {
         /* Export packets from the production bootstrap, without exercising CAN. */
@@ -417,6 +525,8 @@ int main(int argc, char** argv)
     test_async_stop_and_expiry(); test_durable_response_and_missing_files(); test_identity_scopes(); test_legacy_flash_compatibility();
     test_pinch_cancels_queued_motion();
     test_ultrasonic_cancels_queued_and_rejects_held_commands();
+    test_power_control();
+    test_power_report();
     puts("V4 adapter: expiry, canonical replay, reboot/torn flash, confirmed stop, bootstrap/sync/QoS passed");
     return 0;
 }

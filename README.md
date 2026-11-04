@@ -18,7 +18,7 @@
 - 内部运维：设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA，只供 OTA 平台使用。
 - 不支持：格口映射、试开通道、锁板、RS485 和旧桌面上位机协议。
 
-V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md) 和 [A-BOX 飞翼设备业务协议 V4](docs/protocols/A-BOX飞翼设备业务协议-V4.0.md)，采用单实例 `wing 1.0`，只定义升降、停止、完整状态和位置采样。
+V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md) 和 [A-BOX 飞翼设备业务协议 V4](docs/protocols/A-BOX飞翼设备业务协议-V4.0.md)，采用单实例 `wing 1.0` 和 `device_power 1.0`，定义升降、停止、上下电、完整状态和位置采样。
 
 `top-flying-wing-1.1.0` 使用公共 V4；旧 V3 报文和旧控制 Topic 不再作为本构建的业务入口。现有 V3 设备继续按 [飞翼业务 V3](docs/protocols/A-BOX飞翼设备业务协议-V3.0.md) 对接，平台按实际心跳的 `version` 区分。
 
@@ -66,7 +66,7 @@ python .\tools\make_bootstate.py `
 
 Boot State 固定烧录到 `0x0803E800`，总长 4 KiB，不能烧到 `0x08000000`。
 
-上述脚本默认构建 `top-flying-wing-1.1.8`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 及本次 App 生成匹配 Boot State，合成为维修用 Full 包。打包先生成完整临时制品，通过 `verify_release.py` 后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
+上述脚本默认构建 `top-flying-wing-1.1.9`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 及本次 App 生成匹配 Boot State，合成为维修用 Full 包。打包先生成完整临时制品，通过 `verify_release.py` 后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
 
 App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。正式 Full 长度固定为 260096 字节，包含 Boot、App 和匹配的 State A/B 区域，末地址为 `0x0803F7FF`，不包含配置页。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
 

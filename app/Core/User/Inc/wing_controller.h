@@ -41,6 +41,7 @@ typedef struct
     uint16_t code;
     uint8_t accepted;
     uint8_t stop_confirmed;
+    uint32_t observed_tick;
     WingSnapshot snapshot;
 } WingControlResult;
 
@@ -61,6 +62,8 @@ void WingController_UltrasonicStop(void);
 uint8_t WingController_IsUltrasonicBlocked(void);
 void WingController_OnCanRx(CAN_HandleTypeDef* hcan);
 uint16_t WingController_Request(WingAction action, const char* request_id);
+/* Verify stopped feedback and the lower limit before switching power off. */
+uint16_t WingController_CheckPowerOff(const char* request_id);
 const WingSnapshot* WingController_GetSnapshot(void);
 void WingController_CopySnapshot(WingSnapshot* snapshot);
 uint8_t WingController_TakeResult(WingControlResult* result);

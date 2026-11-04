@@ -24,8 +24,12 @@ def main() -> None:
             if field in data:
                 assert len(json.dumps(data[field], ensure_ascii=False, separators=(",", ":")).encode()) <= 768, index
         if "command" in data:
-            assert data["command"] in ("wing_control", "sync_state"), index
-            if data["command"] == "wing_control":
+            assert data["command"] in ("wing_control", "power_on", "power_off", "sync_state"), index
+            if data["command"] in ("power_on", "power_off"):
+                assert data["params"] is None, index
+                if data["command"] == "power_on":
+                    assert 0 < data["expiresAt"] - obj["timestamp"] <= 5000, index
+            elif data["command"] == "wing_control":
                 action = data["params"]["action"]
                 assert action in ("ascend", "descend", "stop"), index
                 if action != "stop":
@@ -35,13 +39,15 @@ def main() -> None:
             else:
                 assert data["params"] is None and "expiresAt" not in data, index
         if "reportName" in data:
-            assert data["reportName"] in ("wing_status", "wing_position"), index
+            assert data["reportName"] in ("wing_status", "wing_position", "power_status"), index
             if data["reportName"] == "wing_status":
                 assert data["reportType"] == "state" and set(data["payload"]) == fields, index
-            else:
+            elif data["reportName"] == "wing_position":
                 assert data["reportType"] == "telemetry" and set(data["payload"]) == {"positionMm", "statusFresh"}, index
+            else:
+                assert data["reportType"] == "state" and type(data["payload"]["powerOutputOn"]) is bool, index
         if "profiles" in data:
-            assert data["profiles"] == [{"name": "wing", "version": "1.0"}], index
+            assert data["profiles"] == [{"name": "device_power", "version": "1.0"}, {"name": "wing", "version": "1.0"}], index
     print(f"V4 public protocol examples checked: {len(blocks)}")
 
 

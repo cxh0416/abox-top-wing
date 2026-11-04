@@ -7,7 +7,7 @@
 #include "app_log.h"
 
 uint8_t __app_image_end;
-static int busy, starts, provisions, polls, credentials, mqtt_ready, provisioned=1;
+static int busy, starts, provisions, polls, credentials, mqtt_ready, config_trial, provisioned=1;
 static const char *phase="IDLE";
 static const ABoxBootV2AppPort* captured;
 uint32_t HAL_GetTick(void) { return 1U; }
@@ -15,6 +15,7 @@ const char* TopFlyingWing_AppFwVersion(void) { return "top-flying-wing-1.1.0"; }
 void AppLog_Printf(AppLogLevel_t l, const char* t, const char* f, ...) { (void)l;(void)t;(void)f; }
 uint8_t MQTT_Core_ClientIndex(void) { return 0U; }
 uint8_t MQTT_Core_IsReady(void) { return (uint8_t)mqtt_ready; }
+uint8_t MQTT_App_IsMqttConfigTrialActive(void) { return (uint8_t)config_trial; }
 uint8_t BoardConfig_HasMqttCredentials(void) { return (uint8_t)credentials; }
 int MqttRuntime_StopFirst(uint32_t n) { (void)n;return 1; }
 int MQTT_Core_BorrowWorkspace(void) { return 1; }
@@ -43,20 +44,26 @@ int main(void)
     OtaService_Init(&at);
     assert(captured && captured->transfer_buffer==OtaService_IdemWorkspace());
     assert(captured->transfer_buffer_size==MQTT_V4_IDEM_WORKSPACE_SIZE);
+    assert(captured->may_start_seed && !captured->may_start_seed(captured->context)); /* empty board */
     assert(OtaService_AcquireIdemWorkspace() && !OtaService_AcquireIdemWorkspace());
     memset(OtaService_IdemWorkspace(),0x5a,MQTT_V4_IDEM_WORKSPACE_SIZE);
     assert(!OtaService_Start(&request) && !OtaService_BeginProvisioning());
     OtaService_Task();assert(!starts && !provisions && !polls);
     OtaService_ReleaseIdemWorkspace();
     credentials=1; mqtt_ready=0;
-    OtaService_Task(); assert(polls==0);
-    phase="ERROR"; OtaService_Task(); assert(polls==1); /* retry is not blocked */
-    phase="IDLE"; provisioned=0; OtaService_Task(); assert(polls==2); /* provisioning advances */
-    provisioned=1; busy=1; OtaService_Task(); assert(polls==3); /* active work advances */
-    busy=0; mqtt_ready=1; OtaService_Task(); assert(polls==4); /* seed can start */
-    credentials=0; mqtt_ready=0; OtaService_Task(); assert(polls==5); /* empty board */
+    assert(!captured->may_start_seed(captured->context));
+    OtaService_Task(); assert(polls==1); /* polling continues while seed is deferred */
+    phase="ERROR"; OtaService_Task(); assert(polls==2); /* retry is not blocked */
+    phase="IDLE"; provisioned=0; OtaService_Task(); assert(polls==3); /* provisioning advances */
+    provisioned=1; busy=1; OtaService_Task(); assert(polls==4); /* active work advances */
+    busy=0; mqtt_ready=1; config_trial=1;
+    assert(!captured->may_start_seed(captured->context)); /* maintenance trial */
+    config_trial=0; assert(captured->may_start_seed(captured->context));
+    OtaService_Task(); assert(polls==5); /* seed can start */
+    credentials=0; assert(!captured->may_start_seed(captured->context));
+    mqtt_ready=0; OtaService_Task(); assert(polls==6); /* empty board */
     assert(OtaService_Start(&request) && starts==1 && !OtaService_AcquireIdemWorkspace());
-    OtaService_Task();assert(polls==6);
+    OtaService_Task();assert(polls==7);
     busy=0;assert(OtaService_BeginProvisioning() && !OtaService_AcquireIdemWorkspace());
     busy=0;at.quarantined=1;assert(!OtaService_AcquireIdemWorkspace());
     at.quarantined=0;assert(OtaService_AcquireIdemWorkspace());

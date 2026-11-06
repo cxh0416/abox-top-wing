@@ -535,14 +535,14 @@ static void test_ultrasonic_stop_and_no_resume(void)
 {
     for (WingAction dir=WING_ACTION_ASCEND; dir<=WING_ACTION_DESCEND; ++dir)
     {
-        reset_controller(); start_running(dir,"sonar-move",60U);
+        reset_controller(); start_running(dir,"sonar-move",80U);
         test_ultrasonic_blocked=1U;
         WingController_UltrasonicStop();
         assert(count_command('S','T')==1 && test_ultrasonic_aborts==1);
         assert(WingController_Request(WING_ACTION_ASCEND,"blocked")==4003);
-        status(60,0,256); /* Stopped feedback cannot replace ST ACK. */
+        status(80,0,256); /* Stopped feedback cannot replace ST ACK. */
         assert(WingController_GetSnapshot()->can_session==WING_CAN_SESSION_STOPPING);
-        ack(WING_ACTION_STOP,257);status(60,0,258);
+        ack(WING_ACTION_STOP,257);status(80,0,258);
         assert(WingController_GetSnapshot()->can_session==WING_CAN_SESSION_IDLE_SILENT);
         unsigned before=g_tx_count;
         for(unsigned n=0;n<10;++n) WingController_Task(300+n*100);
@@ -566,7 +566,7 @@ static void test_ultrasonic_idle_is_alarm_only(void)
     assert(test_ultrasonic_prestart_warnings == 1U && test_ultrasonic_prestart_tick == 0U);
 
     reset_controller();
-    start_running(WING_ACTION_ASCEND, "remote-sonar", 60U);
+    start_running(WING_ACTION_ASCEND, "remote-sonar", 80U);
     assert(!test_ultrasonic_suppressed);
     test_ultrasonic_blocked = 1U;
     WingController_UltrasonicStop();
@@ -605,12 +605,12 @@ static void test_ultrasonic_preempts_can_callback_and_pinch(void)
     WingController_AntiPinch(0,0);
     assert(WingController_Request(WING_ACTION_ASCEND,"new-after-release")==0);
 
-    reset_controller();start_running(WING_ACTION_DESCEND,"sonar-pinch",60);
+    reset_controller();start_running(WING_ACTION_DESCEND,"sonar-pinch",80);
     test_ultrasonic_blocked=1;
     WingController_UltrasonicStop();WingController_AntiPinch(1,1);
-    ack(WING_ACTION_STOP,256);status(60,0,257);
+    ack(WING_ACTION_STOP,256);status(80,0,257);
     assert(count_command('M','O')==0 && count_command('R','L')==1);
-    reset_controller();start_running(WING_ACTION_DESCEND,"sonar-timeout",60);
+    reset_controller();start_running(WING_ACTION_DESCEND,"sonar-timeout",80);
     test_ultrasonic_blocked=1;
     WingController_UltrasonicStop();WingController_AntiPinch(1,1);
     WingController_Task(1255);
@@ -634,13 +634,13 @@ static void test_ultrasonic_preserves_early_pinch_cycle_and_limits(void)
 
 static void test_ultrasonic_stop_failure_stays_locked(void)
 {
-    reset_controller();start_running(WING_ACTION_DESCEND,"down",60);
+    reset_controller();start_running(WING_ACTION_DESCEND,"down",80);
     test_ultrasonic_blocked=1;WingController_UltrasonicStop();
     test_ultrasonic_blocked=0;WingController_Task(1255);
     assert(WingController_GetSnapshot()->can_session==WING_CAN_SESSION_FAULT);
     assert(WingController_Request(WING_ACTION_ASCEND,"after-failed-stop")==4003);
     assert(WingController_Request(WING_ACTION_STOP,"recover")==0);
-    ack(WING_ACTION_STOP,1256);status(60,0,1257);
+    ack(WING_ACTION_STOP,1256);status(80,0,1257);
     assert(WingController_Request(WING_ACTION_ASCEND,"after-confirmed-stop")==0);
 }
 
@@ -670,44 +670,34 @@ static void test_anti_pinch_motion_scope(void)
 
 static void test_ultrasonic_near_retraction_suppression(void)
 {
-    reset_controller();
-    start_running_with_limits(WING_ACTION_DESCEND, "mask-low", 20U, 100U, 0U);
-    WingController_Task(355U);
-    status(10U, 1U, 356U);
-    assert(test_ultrasonic_suppressed);
-    test_ultrasonic_blocked = 1U;
-    WingController_UltrasonicStop();
-    assert(count_command('S', 'T') == 0U && test_ultrasonic_aborts == 0U);
-    WingController_Task(400U);
-    assert(count_command('S', 'T') == 0U);
+    static const struct {
+        WingAction action;
+        uint16_t position_mm;
+        uint8_t suppressed;
+    } cases[] = {
+        { WING_ACTION_ASCEND, 4U, 0U },
+        { WING_ACTION_ASCEND, 5U, 1U },
+        { WING_ACTION_ASCEND, 70U, 1U },
+        { WING_ACTION_ASCEND, 71U, 0U },
+        { WING_ACTION_DESCEND, 0U, 1U },
+        { WING_ACTION_DESCEND, 4U, 1U },
+        { WING_ACTION_DESCEND, 70U, 1U },
+        { WING_ACTION_DESCEND, 71U, 0U },
+    };
 
-    reset_controller();
-    start_running_with_limits(WING_ACTION_ASCEND, "mask-high", 30U, 100U, 0U);
-    WingController_Task(355U);
-    status(50U, 1U, 356U);
-    assert(test_ultrasonic_suppressed);
-    test_ultrasonic_blocked = 1U;
-    WingController_UltrasonicStop();
-    WingController_Task(400U);
-    assert(count_command('S', 'T') == 0U && test_ultrasonic_aborts == 0U);
-
-    reset_controller();
-    start_running_with_limits(WING_ACTION_DESCEND, "door-open", 20U, 100U, 0U);
-    WingController_Task(355U);
-    status(1U, 1U, 356U);
-    assert(!test_ultrasonic_suppressed);
-    test_ultrasonic_blocked = 1U;
-    WingController_Task(400U);
-    assert(count_command('S', 'T') == 1U);
-
-    reset_controller();
-    start_running_with_limits(WING_ACTION_ASCEND, "above-mask", 30U, 100U, 0U);
-    WingController_Task(355U);
-    status(51U, 1U, 356U);
-    assert(!test_ultrasonic_suppressed);
-    test_ultrasonic_blocked = 1U;
-    WingController_Task(400U);
-    assert(count_command('S', 'T') == 1U);
+    for (unsigned i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        reset_controller();
+        start_running_with_limits(cases[i].action, "sonar-boundary",
+                                  cases[i].position_mm, 100U, 0U);
+        assert(test_ultrasonic_suppressed == cases[i].suppressed);
+        test_ultrasonic_blocked = 1U;
+        if (cases[i].suppressed)
+            WingController_UltrasonicStop();
+        WingController_Task(300U);
+        assert(count_command('S', 'T') == (cases[i].suppressed ? 0U : 1U));
+        assert(test_ultrasonic_aborts == (cases[i].suppressed ? 0U : 1U));
+    }
 
     reset_controller();
     start_running_with_limits(WING_ACTION_ASCEND, "idle-check", 20U, 100U, 0U);

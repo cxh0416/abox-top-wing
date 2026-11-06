@@ -24,7 +24,7 @@ def main() -> None:
             if field in data:
                 assert len(json.dumps(data[field], ensure_ascii=False, separators=(",", ":")).encode()) <= 768, index
         if "command" in data:
-            assert data["command"] in ("wing_control", "sync_state"), index
+            assert data["command"] in ("wing_control", "sync_state", "power_on", "power_off"), index
             if data["command"] == "wing_control":
                 action = data["params"]["action"]
                 assert action in ("ascend", "descend", "stop"), index
@@ -33,15 +33,30 @@ def main() -> None:
                 else:
                     assert "expiresAt" not in data, index
             else:
-                assert data["params"] is None and "expiresAt" not in data, index
+                assert data["params"] is None, index
+                if data["command"] == "power_on":
+                    assert 0 < data["expiresAt"] - obj["timestamp"] <= 5000, index
+                elif data["command"] == "sync_state":
+                    assert "expiresAt" not in data, index
+                elif "expiresAt" in data:
+                    assert data["expiresAt"] > obj["timestamp"], index
         if "reportName" in data:
-            assert data["reportName"] in ("wing_status", "wing_position"), index
+            assert data["reportName"] in ("wing_status", "wing_position", "power_status"), index
             if data["reportName"] == "wing_status":
                 assert data["reportType"] == "state" and set(data["payload"]) == fields, index
-            else:
+            elif data["reportName"] == "wing_position":
                 assert data["reportType"] == "telemetry" and set(data["payload"]) == {"positionMm", "statusFresh"}, index
+            else:
+                assert data["reportType"] == "state" and set(data["payload"]) == {"powerOutputOn"}, index
+                assert type(data["payload"]["powerOutputOn"]) is bool, index
+        if isinstance(data.get("result"), dict) and "powerOutputOn" in data["result"]:
+            assert data["code"] == 200 and type(data["result"]["powerOutputOn"]) is bool, index
         if "profiles" in data:
-            assert data["profiles"] == [{"name": "wing", "version": "1.0"}], index
+            profiles = data["profiles"]
+            assert all(p in ({"name": "wing", "version": "1.0"},
+                             {"name": "device_power", "version": "1.0"}) for p in profiles), index
+            assert sum(p["name"] == "wing" for p in profiles) == 1, index
+            assert sum(p["name"] == "device_power" for p in profiles) <= 1, index
     print(f"V4 public protocol examples checked: {len(blocks)}")
 
 

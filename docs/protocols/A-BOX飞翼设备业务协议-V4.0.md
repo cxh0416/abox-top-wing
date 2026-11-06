@@ -5,7 +5,7 @@
 | 适用产品 | 飞翼升降设备 A-BOX |
 | 文档修订号 | V4.0 |
 | 报文版本 | `4.0` |
-| Profile 名称及版本 | `wing 1.0` |
+| Profile 名称及版本 | `wing 1.0`；`device_power 1.0` 为可选能力 |
 | 文档属性 | 业务接口规范 |
 | 依赖协议 | [A-BOX 设备公共 MQTT 协议 V4.0](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md) |
 
@@ -17,21 +17,23 @@
 - [4. 命令定义](#4-命令定义)
   - [4.1 wing_control](#41-wing_control)
   - [4.2 sync_state](#42-sync_state)
+  - [4.3 power_on 与 power_off](#43-power_on-与-power_off)
 - [5. 业务报告](#5-业务报告)
   - [5.1 wing_status](#51-wing_status)
   - [5.2 wing_position](#52-wing_position)
+  - [5.3 power_status](#53-power_status)
 - [6. 交互与异常处理](#6-交互与异常处理)
 - [7. 错误与产品约束](#7-错误与产品约束)
 
 ## 1. 范围与引用
 
-本协议定义飞翼上升、下降、停止及状态同步接口。公共报文、Topic、QoS、身份、心跳、Manifest、有效期、幂等及兼容规则遵循公共 V4；本文只规定飞翼业务参数、成功边界和状态语义。
+本协议定义飞翼上升、下降、停止、上下电及状态同步接口。公共报文、Topic、QoS、身份、心跳、Manifest、有效期、幂等及兼容规则遵循公共 V4；本文只规定飞翼业务参数、成功边界和状态语义。
 
-设备身份由 Topic 中的 `deviceId` 确定，能力由 Manifest 中的 `wing` 声明；请求和报告不要求携带 `deviceType` 或 `product`。厂家通信、内部控制流程和运维接口不属于本协议。
+设备身份由 Topic 中的 `deviceId` 确定，能力由 Manifest 声明；请求和报告不要求携带 `deviceType` 或 `product`。厂家通信、内部控制流程和运维接口不属于本协议。
 
 ## 2. 通信约定与能力声明
 
-Profile 名称固定为 `wing`，版本为 `1.0`；单实例，不使用 `instanceId`。
+所有设备均声明 `wing 1.0`，提供飞翼升降；支持上下电的设备额外声明 `device_power 1.0`。均为单实例，不使用 `instanceId`。平台必须按设备当前已确认的 Manifest 判断是否支持上下电，不能对只声明 `wing` 的设备下发电源命令。
 
 | 方向 | 消息 | Topic | QoS | Retain |
 | --- | --- | --- | ---: | --- |
@@ -42,15 +44,17 @@ Profile 名称固定为 `wing`，版本为 `1.0`；单实例，不使用 `instan
 | A-BOX → 平台 | 心跳 | `/zxwl/abox/{deviceId}/heartbeat` | 0 | false |
 | A-BOX → 平台 | 能力声明 | `/zxwl/abox/{deviceId}/manifest` | 1 | true |
 
-平台先订阅 Manifest、Heartbeat、Report 和 Response，其中 Report 订阅使用 QoS 1。下发动作前，须按公共 V4 第 7.3～7.5 节将同设备的 Manifest 与当前在线 V4 心跳匹配，并确认支持 `wing 1.0`。心跳周期为 5 秒，连续 15 秒未收到即判定 A-BOX 离线。
+平台先订阅 Manifest、Heartbeat、Report 和 Response，其中 Report 订阅使用 QoS 1。下发动作前，须按公共 V4 第 7.3～7.5 节将同设备的 Manifest 与当前在线 V4 心跳匹配，并确认支持相应版本的 `wing`。心跳周期为 5 秒，连续 15 秒未收到即判定 A-BOX 离线。
 
-**示例 1：Manifest（设备 → 平台；`/zxwl/abox/demo_wing_01/manifest`；完整报文）**
+**示例 1：支持上下电的 Manifest（设备 → 平台；`/zxwl/abox/demo_wing_01/manifest`；完整报文）**
 
 ```json
-{"version":"4.0","timestamp":1800000000000,"data":{"firmware":"<固件版本字符串>","profiles":[{"name":"wing","version":"1.0"}]}}
+{"version":"4.0","timestamp":1800000000000,"data":{"firmware":"<固件版本字符串>","profiles":[{"name":"device_power","version":"1.0"},{"name":"wing","version":"1.0"}]}}
 ```
 
 上例适用于同一 `firmware` 唯一决定能力集合及版本的设备；否则必须按公共协议增加 `manifestId`，并由心跳回显。
+
+只支持升降的设备的 `profiles` 为 `[{"name":"wing","version":"1.0"}]`；不声明 `device_power`。
 
 ## 3. 接口总览与时序约束
 
@@ -59,11 +63,13 @@ Profile 名称固定为 `wing`，版本为 `1.0`；单实例，不使用 `instan
 | `wing_control`，`action=ascend` | `DISCRETE_ACTION` | `{"action":"ascend"}` | 必填 / 5 秒 |
 | `wing_control`，`action=descend` | `DISCRETE_ACTION` | `{"action":"descend"}` | 必填 / 5 秒 |
 | `wing_control`，`action=stop` | `SAFETY_STOP` | `{"action":"stop"}` | 不使用 |
+| `power_on` | `DISCRETE_ACTION` | `null` | 必填 / 5 秒 |
+| `power_off` | `SAFETY_STOP` | `null` | 可选 / 无额外上限 |
 | `sync_state` | `QUERY`，Core 保留命令 | `null` | 不使用 |
 
-`action` 区分三种操作，缺失或非法时返回 `4001`。升降请求的原始有效期必须满足 `0 < expiresAt - timestamp <= 5000 ms`；缺失或非法返回 `4001`，已过期返回 `4005`，可信时间不足以判断尚未过期返回 `4003`。`stop` 和 `sync_state` 不依赖授时，携带 `expiresAt` 时返回 `4001`。
+`wing_control.action` 区分三种操作，缺失或非法时返回 `4001`。升降及 `power_on` 请求的原始有效期必须满足 `0 < expiresAt - timestamp <= 5000 ms`；缺失或非法返回 `4001`，已过期返回 `4005`，可信时间不足以判断尚未过期返回 `4003`。`power_off` 可省略有效期，携带时同样必须尚未过期且可信时间可判断。`stop` 和 `sync_state` 不依赖授时，携带 `expiresAt` 时返回 `4001`。
 
-升降采用公共 V4 的 `persistent_idempotency` 跨重启保护：重复请求不得重复启动，保护窗口内保留原请求的逻辑内容及首次完整响应。重启后不得自动恢复此前动作；状态必须重新确认。记录保留和内容冲突规则遵循公共 V4 第 4.4 节。
+升降及 `power_on` 采用公共 V4 的 `persistent_idempotency` 跨重启保护：重复请求不得重复执行，保护窗口内保留原请求的逻辑内容及首次完整响应。`power_off` 为安全停止操作，相同合法请求可以再次执行，但每次都须满足本产品的下电条件。重启后不得自动恢复此前升降动作；状态必须重新确认。记录保留和内容冲突规则遵循公共 V4 第 4.4 节。
 
 ## 4. 命令定义
 
@@ -125,10 +131,28 @@ Profile 名称固定为 `wing`，版本为 `1.0`；单实例，不使用 `instan
 **示例 6：同步响应（设备 → 平台；`/zxwl/abox/demo_wing_01/response`；完整报文）**
 
 ```json
-{"version":"4.0","timestamp":1800000002010,"data":{"requestId":"wing-sync-001","code":200,"msg":"state synchronization scheduled","result":{"expectedStates":[{"reportName":"wing_status"}]}}}
+{"version":"4.0","timestamp":1800000002010,"data":{"requestId":"wing-sync-001","code":200,"msg":"state synchronization scheduled","result":{"expectedStates":[{"reportName":"wing_status"},{"reportName":"power_status"}]}}}
 ```
 
-`200` 只表示已安排同步。收到关联同一 `requestId` 的完整 `wing_status` 才算收齐；报告可以先于响应到达。从成功响应起等待 15 秒仍未收齐时，本轮不完整，不得推断已停止或动作完成。位置采样及其他请求的报告不能补齐本轮同步。
+`200` 只表示已安排同步。只声明 `wing` 的设备将 `expectedStates` 设置为 `[{"reportName":"wing_status"}]`；同时声明 `device_power` 的设备按上例列出 `wing_status` 和 `power_status`。平台按响应列出的集合收齐关联同一 `requestId` 的完整状态；报告可以先于响应到达。从成功响应起等待 15 秒仍未收齐时，本轮不完整，不得推断已停止或动作完成。位置采样及其他请求的报告不能补齐本轮同步。
+
+### 4.3 `power_on` 与 `power_off`
+
+本节只适用于已声明 `device_power 1.0` 的设备。两个命令的 `params` 均为 `null`。`power_on` 请求开启飞翼及其配套设备供电；`power_off` 仅在确认飞翼已停止并收拢至下端点后关闭供电，不会自动发起下降。运动中、位置未到下端点、反馈缺失或下限不可确认时不执行下电。已关闭时再次下电仍可确认输出状态。设备重新启动后默认请求上电，不恢复重启前的下电状态。
+
+`code=200` 表示设备已将供电输出设置为请求状态，`result.powerOutputOn` 为 Boolean，上电成功为 `true`，下电成功为 `false`；该值不表示继电器动作、电压或飞翼实际供电已被测量确认。动作完成后报告 `power_status`，也可用 `sync_state` 获取当前状态；历史响应不代表当前输出状态。重新上电不自动恢复原升降动作。
+
+**示例：下电（平台 → 设备；`/zxwl/abox/demo_wing_01/request`；完整请求）**
+
+```json
+{"version":"4.0","timestamp":1800000000000,"data":{"requestId":"wing-power-off-001","command":"power_off","params":null}}
+```
+
+**示例：下电响应（设备 → 平台；`/zxwl/abox/demo_wing_01/response`；完整报文）**
+
+```json
+{"version":"4.0","timestamp":1800000000500,"data":{"requestId":"wing-power-off-001","code":200,"msg":"operation accepted","result":{"powerOutputOn":false}}}
+```
 
 ## 5. 业务报告
 
@@ -136,8 +160,9 @@ Profile 名称固定为 `wing`，版本为 `1.0`；单实例，不使用 `instan
 | --- | --- | --- | --- |
 | `wing_status` | `state` | 是 | 启动、重连、同步，以及动作、停止、端点、故障或控制器可用状态变化 |
 | `wing_position` | `telemetry` | 否 | 运动期间按 200 ms 目标周期发送最新位置采样 |
+| `power_status` | `state` | 是 | 声明 `device_power` 的设备启动、重连、同步以及供电输出变化 |
 
-两种报告均为单实例，不使用严格有序流。平台按公共 V4 第 5 节进行 `reportId` 去重和接收顺序处理；不得仅按设备 `timestamp` 排序或把报文到达顺序宣称为生成顺序。
+三种报告均为单实例，不使用严格有序流。平台按公共 V4 第 5 节进行 `reportId` 去重和接收顺序处理；不得仅按设备 `timestamp` 排序或把报文到达顺序宣称为生成顺序。
 
 ### 5.1 `wing_status`
 
@@ -158,7 +183,7 @@ Profile 名称固定为 `wing`，版本为 `1.0`；单实例，不使用 `instan
 
 `ascending` / `descending` 表示已接受动作对应的方向，不能单凭它证明真实机械运动；方向无法确定时使用 `moving_unknown`。`unknown`、`moving_unknown`、`fault`、`offline` 及未知枚举均不得解释为已停止。
 
-动作受理、完成、失败或停止直接触发的状态必须携带对应请求的 `data.requestId`；升降的端点完成或安全停止报告关联原升降请求，显式停止报告关联停止请求。同步报告关联同步请求；启动、重连及无关联请求的自动状态变化省略 `requestId`。同步或重连报告只表达快照，不代表旧动作成功。
+升降动作受理、完成、失败或停止直接触发的 `wing_status` 必须携带对应请求的 `data.requestId`；升降的端点完成或安全停止报告关联原升降请求，显式停止报告关联停止请求。同步报告关联同步请求；启动、重连及无关联请求的自动状态变化省略 `requestId`。同步或重连报告只表达快照，不代表旧动作成功。
 
 **示例 7：停止确认状态（设备 → 平台；`/zxwl/abox/demo_wing_01/report`；完整报文）**
 
@@ -199,6 +224,14 @@ Profile 名称固定为 `wing`，版本为 `1.0`；单实例，不使用 `instan
 {"version":"4.0","timestamp":1800000000800,"data":{"reportId":"wing-position-001","reportType":"telemetry","reportName":"wing_position","payload":{"positionMm":126,"statusFresh":true}}}
 ```
 
+### 5.3 `power_status`
+
+`payload.powerOutputOn` 为必填 Boolean，表示受控输出是否全部处于开启控制状态；`false` 表示未全部开启，仅下电成功响应确认本次关闭控制。该字段不证明负载电压或继电器触点状态。上下电动作产生的状态报告关联该动作的 `requestId`；同步报告关联同步请求，启动和重连报告不关联请求。
+
+```json
+{"version":"4.0","timestamp":1800000003000,"data":{"reportId":"power-status-001","reportType":"state","reportName":"power_status","requestId":"wing-power-off-001","payload":{"powerOutputOn":false}}}
+```
+
 ## 6. 交互与异常处理
 
 1. 接入或恢复连接后，先确认当前能力并恢复完整状态；需要明确同步轮次时发送新的 `sync_state`。
@@ -217,7 +250,7 @@ Profile 名称固定为 `wing`，版本为 `1.0`；单实例，不使用 `instan
 | ---: | --- |
 | `4001` | 动作、参数或有效期非法 |
 | `4002` | 不支持该命令 |
-| `4003` | 当前存在互斥动作、现场控制占用，或升降所需可信时间不可用 |
+| `4003` | 当前存在互斥动作、现场控制占用、未满足下电条件，或请求所需可信时间不可用 |
 | `5001` | A-BOX 内部异常 |
 | `5002` | 下游控制器不可用 |
 | `5003` | 当前反馈不足以安全接受动作，或未在规定时间内取得确认 |

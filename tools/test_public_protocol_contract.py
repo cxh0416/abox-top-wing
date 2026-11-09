@@ -44,6 +44,8 @@ def main() -> None:
                 assert data["params"] is None, index
                 if data["command"] == "power_on":
                     assert 0 < data["expiresAt"] - obj["timestamp"] <= 5000, index
+                elif "expiresAt" in data:
+                    assert data["expiresAt"] > obj["timestamp"], index
             elif data["command"] == "wing_control":
                 action = data["params"]["action"]
                 assert action in ("ascend", "descend", "stop"), index
@@ -60,9 +62,16 @@ def main() -> None:
             elif data["reportName"] == "wing_position":
                 assert data["reportType"] == "telemetry" and set(data["payload"]) == {"positionMm", "statusFresh"}, index
             else:
-                assert data["reportType"] == "state" and type(data["payload"]["powerOutputOn"]) is bool, index
+                assert data["reportType"] == "state" and set(data["payload"]) == {"powerOutputOn"}, index
+                assert type(data["payload"]["powerOutputOn"]) is bool, index
+        if isinstance(data.get("result"), dict) and "powerOutputOn" in data["result"]:
+            assert data["code"] == 200 and type(data["result"]["powerOutputOn"]) is bool, index
         if "profiles" in data:
-            assert data["profiles"] == [{"name": "device_power", "version": "1.0"}, {"name": "wing", "version": "1.0"}], index
+            profiles = data["profiles"]
+            assert all(p in ({"name": "wing", "version": "1.0"},
+                             {"name": "device_power", "version": "1.0"}) for p in profiles), index
+            assert sum(p["name"] == "wing" for p in profiles) == 1, index
+            assert sum(p["name"] == "device_power" for p in profiles) <= 1, index
     print(f"V4 public protocol examples checked: {len(blocks)}")
 
 

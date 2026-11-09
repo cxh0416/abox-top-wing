@@ -75,10 +75,10 @@ static uint8_t ultrasonic_near_retraction_suppressed(void)
 {
     const WingSnapshot* snapshot = &g_state.snapshot;
     return snapshot->have_position &&
-           (snapshot->active_action == WING_ACTION_ASCEND ||
-            snapshot->active_action == WING_ACTION_DESCEND) &&
-           snapshot->position_mm >= WING_ULTRASONIC_SUPPRESS_MIN_MM &&
-           snapshot->position_mm <= WING_ULTRASONIC_SUPPRESS_MAX_MM;
+           snapshot->position_mm <= WING_ULTRASONIC_SUPPRESS_MAX_MM &&
+           (snapshot->active_action == WING_ACTION_DESCEND ||
+            (snapshot->active_action == WING_ACTION_ASCEND &&
+             snapshot->position_mm >= WING_ULTRASONIC_ASCEND_SUPPRESS_MIN_MM));
 }
 
 static void sync_ultrasonic_suppression(void)

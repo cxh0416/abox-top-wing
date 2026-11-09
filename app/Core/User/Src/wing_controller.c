@@ -548,11 +548,12 @@ void WingController_Init(void)
              (unsigned long)WING_CAN_RX_ID);
 }
 
-static uint16_t controller_request(WingAction action, const char* request_id)
+static uint16_t controller_request(WingAction action, const char* request_id, uint8_t untracked_stop)
 {
     uint32_t now = HAL_GetTick();
     uint16_t code;
-    if (!request_id || !request_id[0] || action == WING_ACTION_NONE) return 4001U;
+    if (!request_id || (!request_id[0] && !(untracked_stop && action == WING_ACTION_STOP)) ||
+        action == WING_ACTION_NONE) return 4001U;
     if (!WingPower_IsOn()) return 5002U;
 
     if (action == WING_ACTION_STOP)
@@ -592,7 +593,17 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
     uint32_t irq = __get_PRIMASK();
     uint16_t code;
     __disable_irq();
-    code = controller_request(action, request_id);
+    code = controller_request(action, request_id, 0U);
+    __set_PRIMASK(irq);
+    return code;
+}
+
+uint16_t WingController_RequestUntrackedStop(void)
+{
+    uint32_t irq = __get_PRIMASK();
+    uint16_t code;
+    __disable_irq();
+    code = controller_request(WING_ACTION_STOP, "", 1U);
     __set_PRIMASK(irq);
     return code;
 }

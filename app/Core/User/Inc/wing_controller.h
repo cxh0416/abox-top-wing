@@ -62,6 +62,8 @@ void WingController_UltrasonicStop(void);
 uint8_t WingController_IsUltrasonicBlocked(void);
 void WingController_OnCanRx(CAN_HandleTypeDef* hcan);
 uint16_t WingController_Request(WingAction action, const char* request_id);
+/* Safety fallback when no request slot is available; no result is correlated. */
+uint16_t WingController_RequestUntrackedStop(void);
 /* Verify stopped feedback and the lower limit before switching power off. */
 uint16_t WingController_CheckPowerOff(const char* request_id);
 const WingSnapshot* WingController_GetSnapshot(void);

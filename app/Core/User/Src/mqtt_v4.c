@@ -16,6 +16,7 @@
 #include "wing_power.h"
 
 #define CACHE_COUNT 12U
+#define ORDINARY_CACHE_COUNT (CACHE_COUNT - 1U)
 typedef enum { POWER_NONE, POWER_ON, POWER_OFF } PowerAction;
 typedef struct
 {
@@ -185,18 +186,25 @@ static Request* find(const char* id)
 
 static Request* reserve(void)
 {
-    for (unsigned i = 0; i < CACHE_COUNT; ++i)
+    Request* oldest_stop = NULL;
+    uint32_t now = HAL_GetTick();
+    for (unsigned i = 0; i < ORDINARY_CACHE_COUNT; ++i)
     {
         Request* r = &requests[i];
-        if (!r->valid || (!r->inflight && !r->retry_response && HAL_GetTick() - r->tick > 600000U))
+        if (!r->valid || (!r->inflight && !r->retry_response && now - r->tick > 600000U))
         { memset(r, 0, sizeof(*r)); r->store_slot = -1; return r; }
+        if (!r->inflight && !r->retry_response && !r->awaiting_dispatch && !r->completing &&
+            r->store_slot < 0 && r->action == WING_ACTION_STOP &&
+            (!oldest_stop || now - r->tick > now - oldest_stop->tick)) oldest_stop = r;
     }
-    return NULL;
+    if (oldest_stop) { memset(oldest_stop, 0, sizeof(*oldest_stop)); oldest_stop->store_slot = -1; }
+    return oldest_stop;
 }
 
 static void complete(Request* r, uint16_t code)
 {
     r->timestamp = TimeBase_GetReportedMs();
+    if (r->action == WING_ACTION_STOP) r->tick = HAL_GetTick();
     r->code = code;
     r->awaiting_dispatch = 0U;
     if (r->store_slot >= 0)
@@ -288,6 +296,15 @@ static int queue_sync(const char* id)
     return 1;
 }
 
+static void untracked_stop(const char* id, uint8_t report_error)
+{
+    uint16_t code;
+    MQTT_V4_CancelPendingMotion();
+    code = WingController_RequestUntrackedStop();
+    if (code && report_error)
+        (void)respond(id, code == 200U ? 5003U : code, TimeBase_GetReportedMs(), 0U, POWER_NONE);
+}
+
 void MQTT_V4_HandleRequest(const char* text)
 {
     ABoxMqttRequest request = {0};
@@ -318,6 +335,12 @@ void MQTT_V4_HandleRequest(const char* text)
     r = find(request.request_id);
     if (r && memcmp(r->digest, request.digest, sizeof(request.digest))) { code = 4006U; goto error; }
     if (r && r->inflight) goto done;
+    if (r && r->retry_response && action == WING_ACTION_STOP)
+    {
+        if (!respond(r->id, r->code, r->timestamp, r->sync, r->power))
+        { untracked_stop(request.request_id, 0U); goto done; }
+        r->retry_response = 0U;
+    }
     if (r && r->store_slot < 0 && action != WING_ACTION_STOP && power != POWER_OFF)
     {
         if (sync && r->code == 200U && !queue_sync(r->id)) { code = 4003U; goto error; }
@@ -362,10 +385,12 @@ void MQTT_V4_HandleRequest(const char* text)
     code = ABoxMqttRequest_CheckNew(&request, operation, &clock);
     if (code != 200U) goto error;
     if (!r) r = reserve();
-    if (!r && (action == WING_ACTION_STOP || power == POWER_OFF))
+    if (!r && action == WING_ACTION_STOP)
     {
-        for (unsigned i = 0; i < CACHE_COUNT; ++i)
-            if (!requests[i].inflight) { r = &requests[i]; break; }
+        Request* stop_slot = &requests[ORDINARY_CACHE_COUNT];
+        if (!stop_slot->valid || (!stop_slot->inflight && !stop_slot->retry_response &&
+            !stop_slot->awaiting_dispatch && !stop_slot->completing && stop_slot->store_slot < 0)) r = stop_slot;
+        else { untracked_stop(request.request_id, 1U); goto done; }
     }
     if (!r) { code = 4003U; goto error; }
     memset(r, 0, sizeof(*r));
@@ -525,13 +550,18 @@ void MQTT_V4_ResetReports(void)
 
 uint8_t MQTT_V4_AnnouncementReady(void) { return bootstrap.ready && !ABoxCloudBootstrap_Active(&bootstrap); }
 
+void MQTT_V4_RetryResponses(void)
+{
+    for (unsigned i = 0; i < CACHE_COUNT; ++i)
+        if (requests[i].retry_response && respond(requests[i].id, requests[i].code, requests[i].timestamp, requests[i].sync, requests[i].power)) requests[i].retry_response = 0U;
+}
+
 void MQTT_V4_ReportTask(void)
 {
     ABoxCloudJob job;
     ABoxMqttReceiptStatus receipt;
     uint32_t now = HAL_GetTick();
-    for (unsigned i = 0; i < CACHE_COUNT; ++i)
-        if (requests[i].retry_response && respond(requests[i].id, requests[i].code, requests[i].timestamp, requests[i].sync, requests[i].power)) requests[i].retry_response = 0U;
+    MQTT_V4_RetryResponses();
     if (!MQTT_Core_IsReady())
     {
         ABoxCloudBootstrap_SetReady(&bootstrap, 0);

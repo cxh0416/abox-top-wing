@@ -21,6 +21,8 @@ static uint32_t ready_seq;
 static int program_budget;
 static uint8_t expire_during_write;
 static unsigned response_count, publish_count;
+static uint8_t response_queue_blocked;
+static char response_ids[128][65];
 static char response[1030];
 typedef struct { char topic[128], payload[1030]; uint8_t qos, retain; } Publish;
 static Publish published[64];
@@ -33,6 +35,7 @@ char g_mqtt_app_status_report_topic[128] = "/zxwl/abox/W1/report";
 uint32_t g_mqtt_app_last_hb_tick, g_mqtt_app_last_hb_ok_tick;
 volatile uint8_t g_mqtt_app_hb_pending, g_mqtt_app_resp_pending;
 void MQTT_V4_TestReset(void);
+void MQTT_V4_RetryResponses(void);
 
 uint8_t* MQTT_V4_TestFlash(void) { return flash_page.bytes; }
 int MQTT_V4_TestProgram(uint32_t offset, const void* data, uint32_t length)
@@ -72,7 +75,12 @@ uint16_t TimeBase_CheckExpiry(uint64_t expiry)
 { ABoxClockSnapshot s = TimeBase_GetSnapshot(); return ABoxMqttV4_CheckExpiry(&s, expiry); }
 const char* TopFlyingWing_AppFwVersion(void) { return "top-flying-wing-1.1.0"; }
 uint8_t MQTT_App_QueuePublicResponse(const char* payload, const char* id, uint16_t code)
-{ (void)id; assert(code && strlen(payload) <= 1024U); strcpy(response, payload); ++response_count; return 1U; }
+{
+    assert(code && strlen(payload) <= 1024U);
+    if (response_queue_blocked) return 0U;
+    assert(response_count < 128U);
+    strcpy(response_ids[response_count], id); strcpy(response, payload); ++response_count; return 1U;
+}
 uint8_t MQTT_Core_IsReady(void) { return ready; }
 uint32_t MQTT_Core_GetReadySeq(void) { return ready_seq; }
 uint8_t MQTT_Core_IsPublishActive(void) { return publish_busy; }
@@ -139,7 +147,7 @@ static void reset_all(void)
     memset(flash_page.bytes, 255, sizeof(flash_page.bytes));
     memset(published, 0, sizeof(published)); memset(receipts, 0, sizeof(receipts));
     utc = 1800000000000ULL; trusted = ready = 1U; ready_seq = 1U; publish_busy = 0U;
-    program_budget = -1; response_count = publish_count = 0U;
+    program_budget = -1; response_count = publish_count = 0U; response_queue_blocked = 0U;
     strcpy(g_mqtt_app_device_id,"W1"); expire_during_write=0U; memset(files,0,sizeof(files)); file_operation=writes=0; leased=ota_busy=file_error=0; cut_write=-1;
     g_mqtt_app_last_hb_tick = g_mqtt_app_last_hb_ok_tick = 0U;
     reset_controller(); boot_storage();
@@ -254,6 +262,112 @@ static void test_stop_confirmation_and_long_ids(void)
     ack(WING_ACTION_STOP,256U); status_with_fault(50U,1U,1U,257U); results(); assert(code()==5005);
 }
 
+static void finish_explicit_stop(uint32_t tick)
+{
+    ack(WING_ACTION_STOP, tick); status(50U, 0U, tick + 1U); results();
+}
+
+static void test_completed_stops_do_not_fill_cache(void)
+{
+    char id[32];
+    reset_all();
+    for (unsigned i = 0; i < 16U; ++i)
+    {
+        unsigned before = response_count;
+        snprintf(id, sizeof(id), "stop-history-%u", i);
+        request(id, "stop");
+        assert(response_count == before && count_command('S','T') == i + 1U);
+        finish_explicit_stop(10U + i * 2U);
+        assert(response_count == before + 1U && code() == 200);
+    }
+    request("after-stop-history", "ascend");
+    assert(count_command('R','D') >= 1U && WingController_GetSnapshot()->can_session == WING_CAN_SESSION_PREFLIGHT);
+}
+
+static void test_stop_cache_priority_and_queue_backpressure(void)
+{
+    char id[32];
+    reset_all(); response_queue_blocked = 1U;
+    for (unsigned i = 0; i < 11U; ++i)
+    {
+        snprintf(id, sizeof(id), "pending-stop-%u", i);
+        request(id, "stop"); finish_explicit_stop(10U + i * 2U);
+    }
+    assert(response_count == 0U);
+    request("ordinary-when-full", "ascend"); assert(count_command('R','D') == 11U);
+    /* The twelfth stop uses the dedicated slot. Its same-ID retry waits;
+     * a different stop cannot report success while feedback is pending. */
+    request("reserved-stop", "stop");
+    unsigned stops = count_command('S','T');
+    request("reserved-stop", "stop"); assert(count_command('S','T') == stops);
+    response_queue_blocked = 0U;
+    request("another-stop", "stop"); assert(code() == 5003 && count_command('S','T') == stops);
+    response_queue_blocked = 1U;
+    finish_explicit_stop(100U); assert(response_count == 1U);
+    /* All slots now hold unsent responses. The fallback still sends ST but
+     * must not fabricate a success or overwrite any of those responses. */
+    request("untracked-stop", "stop"); assert(count_command('S','T') == stops + 1U);
+    finish_explicit_stop(102U); assert(response_count == 1U);
+    response_queue_blocked = 0U; MQTT_V4_RetryResponses();
+    assert(response_count == 13U);
+    for (unsigned i = 0; i < 11U; ++i)
+    {
+        snprintf(id, sizeof(id), "pending-stop-%u", i);
+        assert(!strcmp(response_ids[i + 1U], id));
+    }
+    assert(!strcmp(response_ids[12], "reserved-stop"));
+}
+
+static void test_stop_reclaim_tick_wrap(void)
+{
+    char id[32];
+    reset_all();
+    for (unsigned i = 0; i < 11U; ++i)
+    {
+        uint32_t tick = UINT32_MAX - 20U + i * 3U;
+        snprintf(id, sizeof(id), "wrap-stop-%u", i);
+        g_tick = tick; request(id, "stop"); finish_explicit_stop(tick + 1U);
+    }
+    request("wrap-new", "stop"); finish_explicit_stop(20U);
+    request("wrap-stop-1", "ascend"); assert(code() == 4006);
+    request("wrap-stop-0", "ascend");
+    assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_PREFLIGHT);
+}
+
+static void test_stop_retry_preserves_unqueued_response(void)
+{
+    reset_all(); response_queue_blocked = 1U;
+    request("same-stop-retry", "stop"); finish_explicit_stop(1U);
+    assert(response_count == 0U && count_command('S','T') == 1U);
+    request("same-stop-retry", "stop");
+    assert(response_count == 0U && count_command('S','T') == 2U);
+    response_queue_blocked = 0U; MQTT_V4_RetryResponses();
+    assert(response_count == 1U && code() == 200 && !strcmp(response_ids[0], "same-stop-retry"));
+    finish_explicit_stop(3U);
+    assert(response_count == 1U); /* The fallback cannot claim a second success. */
+}
+
+static void test_stop_with_full_cache_and_pending_persistence(void)
+{
+    char id[32];
+    reset_all(); response_queue_blocked = 1U;
+    for (unsigned i = 0; i < 10U; ++i)
+    {
+        snprintf(id, sizeof(id), "blocked-response-%u", i);
+        request(id, "stop"); finish_explicit_stop(10U + i * 2U);
+    }
+    ota_busy = 1U;
+    request("pending-durable-motion", "ascend");
+    unsigned queries = count_command('R','D');
+    request("stop-pending-durable", "stop");
+    finish_explicit_stop(100U);
+    response_queue_blocked = 0U; ota_busy = 0U; pump();
+    assert(code() == 4003 && !strcmp(response_ids[response_count - 1U], "pending-durable-motion"));
+    assert(count_command('R','D') == queries + 1U && !count_command('U','P'));
+    MQTT_V4_RetryResponses();
+    assert(!strcmp(response_ids[response_count - 1U], "stop-pending-durable"));
+}
+
 static void test_endpoint_turnaround(void)
 {
     reset_all(); request("endpoint-up","ascend"); finish_start();
@@ -277,6 +391,8 @@ static void test_capacity_preserves_protected_requests(void)
     }
     unsigned queries=count_command('R','D');
     request("capacity-full","ascend");assert(code()==4003 && count_command('R','D')==queries);
+    request("stop-with-durable-full", "stop");
+    finish_explicit_stop(g_tick + 1U); assert(code() == 200);
     reset_controller();boot_storage();request("capacity-0","ascend");
     assert(code()==5002 && !g_tx_count); /* Full storage cannot evict an unexpired record. */
 }
@@ -521,7 +637,11 @@ int main(int argc, char** argv)
     }
     wing_control_regression();
     test_expiry_and_strict_input(); test_replay_and_reboot(); test_uncertain_and_torn_records();
-    test_stop_confirmation_and_long_ids(); test_endpoint_turnaround(); test_capacity_preserves_protected_requests(); test_bootstrap_sync_and_report_qos();
+    test_stop_confirmation_and_long_ids(); test_completed_stops_do_not_fill_cache();
+    test_stop_cache_priority_and_queue_backpressure(); test_stop_reclaim_tick_wrap();
+    test_stop_retry_preserves_unqueued_response();
+    test_stop_with_full_cache_and_pending_persistence();
+    test_endpoint_turnaround(); test_capacity_preserves_protected_requests(); test_bootstrap_sync_and_report_qos();
     test_async_stop_and_expiry(); test_durable_response_and_missing_files(); test_identity_scopes(); test_legacy_flash_compatibility();
     test_pinch_cancels_queued_motion();
     test_ultrasonic_cancels_queued_and_rejects_held_commands();

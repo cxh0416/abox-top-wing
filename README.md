@@ -1,6 +1,6 @@
 # A-BOX 顶飞翼固件
 
-产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，当前正式构建版本为 `top-flying-wing-1.1.8`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
+产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，构建脚本默认 App 版本为 `top-flying-wing-1.1.9`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。已有 `dist/` 中的实际版本以其清单为准，不能仅根据构建默认值判断。
 
 公共组件、完整 Boot 边界和其他产品迁移状态见 `platform/README.md`、`platform/docs/PLATFORM_CONTRACT.md`、`platform/docs/PRODUCT_MATRIX.md`。
 
@@ -44,7 +44,7 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build_release.ps1
-python .\tools\verify_release.py .\dist --version top-flying-wing-1.1.8
+python .\tools\verify_release.py .\dist --version top-flying-wing-1.1.9
 python .\tests\test_release_package.py
 powershell -ExecutionPolicy Bypass -File .\tools\test_host.ps1
 powershell -ExecutionPolicy Bypass -File .\tools\test_v4.ps1 -ServiceRoot F:\work\device-ota-service
@@ -61,7 +61,7 @@ python .\tools\test_boot_v2_contract.py
 python .\tools\make_bootstate.py `
   --app .\build\app\TopFlyingWing_App.bin `
   --output .\build\app\TopFlyingWing_BootState.bin `
-  --version top-flying-wing-1.1.8
+  --version top-flying-wing-1.1.9
 ```
 
 Boot State 固定烧录到 `0x0803E800`，总长 4 KiB，不能烧到 `0x08000000`。

@@ -664,35 +664,22 @@ void WingController_AntiPinch(uint8_t pressed, uint8_t trigger)
     __set_PRIMASK(irq);
 }
 
-void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
+static void receive_ack(const WingCanMessage* message, uint32_t now)
 {
-    CAN_RxHeaderTypeDef header;
-    uint8_t data[8];
-    WingCanMessage msg;
-    uint32_t now;
-    if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &header, data) != HAL_OK) return;
-    if (hcan != selected_can()) return; /* Drain even the unused bus FIFO. */
-    if (header.IDE != CAN_ID_EXT ||
-        !WingProtocol_Decode(header.ExtId, (uint8_t)header.DLC, data, &msg)) return;
-    now = HAL_GetTick();
-    if (!g_session.power_off_check && enforce_ultrasonic_stop(now)) return;
-    if (g_session.state != SESSION_WAIT_STOP_ACK && g_session.state != SESSION_WAIT_STOP_STATUS &&
-        pinch_receive(&msg, now)) return;
-
-    if (msg.kind == WING_FRAME_ACK)
+    if (message->kind == WING_FRAME_ACK)
     {
-        if (g_session.state == SESSION_WAIT_START_ACK && msg.action == g_session.action)
+        if (g_session.state == SESSION_WAIT_START_ACK && message->action == g_session.action)
         {
-            if (!msg.accepted) { fail_direction(5004U, WING_CONTROL_OWNER_NONE); return; }
+            if (!message->accepted) { fail_direction(5004U, WING_CONTROL_OWNER_NONE); return; }
             g_session.state = SESSION_WAIT_START_STATUS;
             g_session.phase_tick = now;
             if (!send_query(QUERY_RD, now))
                 (void)begin_stop(STOP_SAFETY, "", now);
             return;
         }
-        if (g_session.state == SESSION_WAIT_STOP_ACK && msg.action == WING_ACTION_STOP)
+        if (g_session.state == SESSION_WAIT_STOP_ACK && message->action == WING_ACTION_STOP)
         {
-            if (!msg.accepted)
+            if (!message->accepted)
             {
                 stop_failed(5004U);
                 return;
@@ -705,18 +692,22 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
         return;
     }
 
-    if (msg.kind == WING_FRAME_LIMITS)
+}
+
+static void receive_limits(const WingCanMessage* message, uint32_t now)
+{
+    if (message->kind == WING_FRAME_LIMITS)
     {
         if (g_session.expected_query != QUERY_RL || g_session.state != SESSION_WAIT_RL) return;
         g_session.expected_query = QUERY_NONE;
-        if (!WingState_ApplyLimits(&g_state, msg.top_limit_mm, msg.bottom_limit_mm))
+        if (!WingState_ApplyLimits(&g_state, message->top_limit_mm, message->bottom_limit_mm))
         {
             fail_direction(5003U, WING_CONTROL_OWNER_NONE);
             return;
         }
         if (g_session.power_off_check)
         {
-            if (msg.top_limit_mm <= msg.bottom_limit_mm)
+            if (message->top_limit_mm <= message->bottom_limit_mm)
             {
                 fail_direction(5003U, WING_CONTROL_OWNER_NONE);
                 return;
@@ -736,18 +727,22 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
         return;
     }
 
-    if (msg.kind != WING_FRAME_STATUS || g_session.expected_query != QUERY_RD) return;
-    if (!msg.accepted) return;
+}
+
+static void receive_status(const WingCanMessage* message, uint32_t now)
+{
+    if (message->kind != WING_FRAME_STATUS || g_session.expected_query != QUERY_RD) return;
+    if (!message->accepted) return;
     g_session.expected_query = QUERY_NONE;
-    WingState_ApplyFeedback(&g_state, now, msg.position_mm, msg.fault_code, msg.moving);
+    WingState_ApplyFeedback(&g_state, now, message->position_mm, message->fault_code, message->moving);
     sync_ultrasonic_suppression();
     sync_anti_pinch_scope();
 
     if (g_session.state == SESSION_WAIT_POWER_STATUS)
     {
-        uint16_t code = msg.fault_code ? 5005U :
-            (msg.moving || msg.position_mm < g_state.snapshot.bottom_limit_mm ||
-             (uint32_t)msg.position_mm > (uint32_t)g_state.snapshot.bottom_limit_mm + WING_ENDPOINT_TOLERANCE_MM) ? 4003U : 200U;
+        uint16_t code = message->fault_code ? 5005U :
+            (message->moving || message->position_mm < g_state.snapshot.bottom_limit_mm ||
+             (uint32_t)message->position_mm > (uint32_t)g_state.snapshot.bottom_limit_mm + WING_ENDPOINT_TOLERANCE_MM) ? 4003U : 200U;
         push_result(g_session.direction_request_id, WING_ACTION_NONE, code);
         finish_idle(WING_CONTROL_OWNER_NONE);
         return;
@@ -756,8 +751,8 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
     if (g_session.state == SESSION_WAIT_RD1 || g_session.state == SESSION_WAIT_RD2)
     {
         uint8_t second = g_session.state == SESSION_WAIT_RD2 ? 1U : 0U;
-        if (msg.fault_code) { fail_direction(5005U, WING_CONTROL_OWNER_NONE); return; }
-        if (msg.moving) { fail_direction(4003U, WING_CONTROL_OWNER_LOCAL_SUSPECTED); return; }
+        if (message->fault_code) { fail_direction(5005U, WING_CONTROL_OWNER_NONE); return; }
+        if (message->moving) { fail_direction(4003U, WING_CONTROL_OWNER_LOCAL_SUSPECTED); return; }
         if (!second)
         {
             g_session.state = SESSION_QUIET_GUARD;
@@ -780,7 +775,7 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
 
     if (g_session.state == SESSION_WAIT_START_STATUS)
     {
-        if (msg.fault_code)
+        if (message->fault_code)
         {
             if (!g_session.direction_result_sent)
             {
@@ -791,7 +786,7 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
             (void)begin_stop(STOP_SAFETY, "", now);
             return;
         }
-        if (!msg.moving)
+        if (!message->moving)
         {
             (void)begin_stop(STOP_CONFLICT, "", now);
             return;
@@ -802,7 +797,7 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
         g_session.state = SESSION_RUNNING;
         g_session.phase_tick = now;
         g_session.last_poll_tick = now;
-        g_session.best_position_mm = msg.position_mm;
+        g_session.best_position_mm = message->position_mm;
         g_session.direction_result_sent = 1U;
         push_result(g_session.direction_request_id, g_session.action, 200U);
         push_report(WING_REPORT_STATE_CHANGED);
@@ -817,10 +812,30 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
 
     if (g_session.state == SESSION_WAIT_STOP_STATUS)
     {
-        if (msg.fault_code) { stop_failed(5005U); return; }
-        if (!msg.moving) finish_stop();
+        if (message->fault_code) { stop_failed(5005U); return; }
+        if (!message->moving) finish_stop();
         return;
     }
+}
+
+void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
+{
+    CAN_RxHeaderTypeDef header;
+    uint8_t data[8];
+    WingCanMessage msg;
+    uint32_t now;
+    if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &header, data) != HAL_OK) return;
+    if (hcan != selected_can()) return; /* Drain even the unused bus FIFO. */
+    if (header.IDE != CAN_ID_EXT ||
+        !WingProtocol_Decode(header.ExtId, (uint8_t)header.DLC, data, &msg)) return;
+    now = HAL_GetTick();
+    if (!g_session.power_off_check && enforce_ultrasonic_stop(now)) return;
+    if (g_session.state != SESSION_WAIT_STOP_ACK && g_session.state != SESSION_WAIT_STOP_STATUS &&
+        pinch_receive(&msg, now)) return;
+
+    if (msg.kind == WING_FRAME_ACK) receive_ack(&msg, now);
+    else if (msg.kind == WING_FRAME_LIMITS) receive_limits(&msg, now);
+    else receive_status(&msg, now);
 }
 
 static void controller_task(uint32_t now)

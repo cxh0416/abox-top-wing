@@ -201,11 +201,33 @@ static uint8_t mqtt_trial_task(uint32_t now)
 
 void MQTT_App_Task(void)
 {
-    uint32_t now=HAL_GetTick();confirm_boot_trial(now);MQTT_App_HandleOtaServiceTask();MQTT_App_HandleWingResultTask();MQTT_V4_Task();TimeSync_Task();
-    if(g_mqtt_app_ota_reset_pending){if(g_mqtt_app_ota_reset_tick&&now-g_mqtt_app_ota_reset_tick>=MQTT_APP_OTA_RESET_DELAY_MS)NVIC_SystemReset();if(MQTT_Core_IsReady()&&g_mqtt_app_resp_pending)MQTT_App_HandlePendingResponseTask();if(g_mqtt_app_ota_request_tick&&now-g_mqtt_app_ota_request_tick>=MQTT_APP_OTA_FORCE_RESET_MS)NVIC_SystemReset();return;}
-    if(g_mqtt_app_resp_pending){MQTT_App_HandlePendingResponseTask();if(g_mqtt_app_resp_pending)return;}
-    if(mqtt_trial_task(now))return;
-    MQTT_App_HandleStatusReportTask();if(MQTT_Core_IsPublishActive())return;MQTT_App_HandleHeartbeatTask();if(g_mqtt_app_hb_pending||MQTT_Core_IsPublishActive())return;MQTT_App_HandleLogReportTask();
+    uint32_t now = HAL_GetTick();
+    confirm_boot_trial(now);
+    MQTT_App_HandleOtaServiceTask();
+    MQTT_App_HandleWingResultTask();
+    MQTT_V4_Task();
+    TimeSync_Task();
+    if (g_mqtt_app_ota_reset_pending)
+    {
+        if (g_mqtt_app_ota_reset_tick && now - g_mqtt_app_ota_reset_tick >= MQTT_APP_OTA_RESET_DELAY_MS)
+            NVIC_SystemReset();
+        if (MQTT_Core_IsReady() && g_mqtt_app_resp_pending)
+            MQTT_App_HandlePendingResponseTask();
+        if (g_mqtt_app_ota_request_tick && now - g_mqtt_app_ota_request_tick >= MQTT_APP_OTA_FORCE_RESET_MS)
+            NVIC_SystemReset();
+        return;
+    }
+    if (g_mqtt_app_resp_pending)
+    {
+        MQTT_App_HandlePendingResponseTask();
+        if (g_mqtt_app_resp_pending) return;
+    }
+    if (mqtt_trial_task(now)) return;
+    MQTT_App_HandleStatusReportTask();
+    if (MQTT_Core_IsPublishActive()) return;
+    MQTT_App_HandleHeartbeatTask();
+    if (g_mqtt_app_hb_pending || MQTT_Core_IsPublishActive()) return;
+    MQTT_App_HandleLogReportTask();
 }
 void MQTT_App_OnMessage(const char* t,const char* p){if(!g_mqtt_app_ota_reset_pending&&!TimeSync_OnMessage(t,p))MQTT_App_HandleCommandMessage(t,p);}
 uint8_t MQTT_App_CanRunBackground(uint32_t guard){uint32_t n=HAL_GetTick(),p=g_mqtt_app_first_hb?MQTT_APP_FIRST_HEARTBEAT_DELAY_MS:MQTT_APP_HEARTBEAT_PERIOD_MS;return !MQTT_App_IsMqttConfigTrialActive()&&!g_mqtt_app_ota_reset_pending&&!g_mqtt_app_resp_pending&&!g_mqtt_app_hb_pending&&MQTT_Core_CanRunBackgroundAt()&&(n-g_mqtt_app_last_hb_tick+guard)<p;}

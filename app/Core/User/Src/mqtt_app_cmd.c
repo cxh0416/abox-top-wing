@@ -11,6 +11,7 @@
 #include "cJSON.h"
 #include "main.h"
 #include "mqtt_app_int.h"
+#include "mqtt_response_internal.h"
 #include "mqtt_core.h"
 #include "ota_service.h"
 #include "time_base.h"
@@ -23,38 +24,35 @@
 #include "abox_cloud_response.h"
 
 #define PRODUCT_ID "top_flying_wing"
-#define RESPONSE_QUEUE_DEPTH 2U
-typedef enum { RESP_CTRL = 0, RESP_INTERNAL_CONFIG, RESP_INTERNAL_OTA } ResponseTopic;
 typedef enum { OTA_REQ_IDLE = 0, OTA_REQ_DOWNLOADING, OTA_REQ_WAIT_MQTT } OtaRequestState;
-typedef struct
-{
-    uint8_t valid;
-    ResponseTopic topic;
-    uint16_t code;
-    char request_id[65];
-    char payload[MQTT_APP_JSON_BUF_SZ];
-} ResponseItem;
-static ResponseItem g_queue[RESPONSE_QUEUE_DEPTH];
-static const ABoxCloudQueueStorage queue_storage = {g_queue, sizeof(g_queue[0]), RESPONSE_QUEUE_DEPTH};
-static ABoxCloudQueueCursor queue_cursor;
 static OtaRequestState g_ota_request_state;
 static uint16_t g_ota_response_code;
 static uint32_t g_ota_response_error;
 static uint32_t g_ota_response_wait_tick;
 static char g_ota_request_id[65];
+static ResponseTopic g_reset_response_topic;
+
+uint8_t MQTT_App_IsOtaResetResponse(const char* topic, const char* request_id, uint16_t code)
+{
+    return g_mqtt_app_ota_reset_pending && g_reset_response_topic == RESP_INTERNAL_OTA &&
+        code == 200U && topic && request_id &&
+        !strcmp(request_id, g_ota_request_id) &&
+        !strcmp(topic, MQTT_Response_Topic(RESP_INTERNAL_OTA));
+}
+
+void MQTT_App_ResetResponseConfirmed(const char* topic, const char* request_id, uint16_t code)
+{
+    if (g_mqtt_app_ota_reset_pending && code == 200U && topic && request_id &&
+        !strcmp(request_id, g_ota_request_id) &&
+        !strcmp(topic, MQTT_Response_Topic(g_reset_response_topic)))
+        g_mqtt_app_ota_reset_tick = HAL_GetTick();
+}
 
 static void copy_id(char dst[65], const char* src)
 {
     if (!src) { dst[0] = '\0'; return; }
     strncpy(dst, src, 64U);
     dst[64] = '\0';
-}
-
-static const char* response_topic(ResponseTopic topic)
-{
-    if (topic == RESP_INTERNAL_CONFIG) return g_mqtt_app_internal_config_resp_topic;
-    if (topic == RESP_INTERNAL_OTA) return g_mqtt_app_internal_ota_resp_topic;
-    return g_mqtt_app_ctrl_resp_topic;
 }
 
 static const char* command_topic_name(const char* topic)
@@ -67,84 +65,12 @@ static const char* command_topic_name(const char* topic)
 
 void MQTT_App_ResetResponseState(void)
 {
-    g_mqtt_app_resp_pending = 0U;
-    g_mqtt_app_resp_publish_active = 0U;
-    g_mqtt_app_resp_payload[0] = '\0';
-    g_mqtt_app_resp_topic[0] = '\0';
-    g_mqtt_app_resp_request_id[0] = '\0';
-    g_mqtt_app_resp_code = 0U;
-    ABoxCloudQueue_Reset(&queue_storage, &queue_cursor);
+    MQTT_Response_Reset();
     g_ota_request_state = OTA_REQ_IDLE;
     g_ota_response_code = 0U;
     g_ota_response_error = 0U;
     g_ota_response_wait_tick = 0U;
     g_ota_request_id[0] = '\0';
-}
-
-void MQTT_App_PromoteQueuedResponse(void)
-{
-    ResponseItem* item;
-    if (g_mqtt_app_resp_pending) return;
-    item = ABoxCloudQueue_Front(&queue_storage, &queue_cursor);
-    if (!item) return;
-    strncpy(g_mqtt_app_resp_topic, response_topic(item->topic), sizeof(g_mqtt_app_resp_topic) - 1U);
-    strncpy(g_mqtt_app_resp_payload, item->payload, sizeof(g_mqtt_app_resp_payload) - 1U);
-    g_mqtt_app_resp_topic[sizeof(g_mqtt_app_resp_topic) - 1U] = '\0';
-    g_mqtt_app_resp_payload[sizeof(g_mqtt_app_resp_payload) - 1U] = '\0';
-    copy_id(g_mqtt_app_resp_request_id, item->request_id);
-    g_mqtt_app_resp_code = item->code;
-    (void)ABoxCloudQueue_Pop(&queue_storage, &queue_cursor);
-    g_mqtt_app_resp_pending = 1U;
-    g_mqtt_app_resp_tick = HAL_GetTick();
-}
-
-uint8_t MQTT_App_DropStalePendingResponse(uint32_t now, uint32_t stale_ms)
-{
-    if (!g_mqtt_app_resp_pending || (now - g_mqtt_app_resp_tick) < stale_ms) return 0U;
-    APP_LOGW("RESP", "stale rid=%s code=%u", g_mqtt_app_resp_request_id,
-             (unsigned)g_mqtt_app_resp_code);
-    g_mqtt_app_resp_pending = 0U;
-    g_mqtt_app_resp_publish_active = 0U;
-    MQTT_App_PromoteQueuedResponse();
-    return 1U;
-}
-
-static uint8_t queue_payload(ResponseTopic topic, const char* payload, const char* request_id, uint16_t code)
-{
-    ResponseItem* item;
-    if (!payload || strlen(payload) >= MQTT_APP_JSON_BUF_SZ) return 0U;
-    if (!g_mqtt_app_resp_pending)
-    {
-        strncpy(g_mqtt_app_resp_topic, response_topic(topic), sizeof(g_mqtt_app_resp_topic) - 1U);
-        strncpy(g_mqtt_app_resp_payload, payload, sizeof(g_mqtt_app_resp_payload) - 1U);
-        g_mqtt_app_resp_topic[sizeof(g_mqtt_app_resp_topic) - 1U] = '\0';
-        g_mqtt_app_resp_payload[sizeof(g_mqtt_app_resp_payload) - 1U] = '\0';
-        copy_id(g_mqtt_app_resp_request_id, request_id);
-        g_mqtt_app_resp_code = code;
-        g_mqtt_app_resp_pending = 1U;
-        g_mqtt_app_resp_tick = HAL_GetTick();
-        return 1U;
-    }
-    item = ABoxCloudQueue_Reserve(&queue_storage, &queue_cursor);
-    if (!item) return 0U;
-    item->valid = 1U;
-    item->topic = topic;
-    item->code = code;
-    copy_id(item->request_id, request_id);
-    strncpy(item->payload, payload, sizeof(item->payload) - 1U);
-    item->payload[sizeof(item->payload) - 1U] = '\0';
-    return ABoxCloudQueue_Commit(&queue_storage, &queue_cursor);
-}
-
-uint8_t MQTT_App_QueueMqttTrialResponse(const char* request_id, uint16_t code)
-{
-    char timestamp[21], output[256];
-    const char* message = code == 202U ? "MQTT_CANDIDATE_TESTING" :
-        code == 200U ? "MQTT_CONFIG_SAVED" : "MQTT_CANDIDATE_RESTORED";
-    if (!TimeBase_FormatUtcMs(timestamp,sizeof(timestamp))) return 0U;
-    if (!ABoxCloudResponse_Encode(output,sizeof(output),"2.0",timestamp,PRODUCT_ID,
-                                  request_id,code,message,"{}")) return 0U;
-    return queue_payload(RESP_INTERNAL_CONFIG,output,request_id,code);
 }
 
 static const char* message_for_code(uint16_t code)
@@ -163,9 +89,10 @@ static const char* message_for_code(uint16_t code)
     return "internal error";
 }
 
-static void build_response(ResponseTopic topic, const char* request_id, uint16_t code,
-                           WingAction action, uint8_t include_wing, cJSON* result)
+static uint8_t build_response_with_policy(ResponseTopic topic, const char* request_id, uint16_t code,
+                           WingAction action, uint8_t include_wing, cJSON* result, uint8_t ota_failure)
 {
+    uint8_t queued = 0U;
     char timestamp[21];
     char output[MQTT_APP_JSON_BUF_SZ];
     cJSON* root = cJSON_CreateObject();
@@ -188,7 +115,9 @@ static void build_response(ResponseTopic topic, const char* request_id, uint16_t
                      "{\"version\":\"2.0\",\"timestamp\":0,\"data\":{\"product\":\"%s\",\"requestId\":\"%s\",\"code\":500,\"msg\":\"response too large\",\"result\":null}}",
                      PRODUCT_ID, request_id ? request_id : "");
     }
-    if (!queue_payload(topic, output, request_id, code))
+    queued = ota_failure ? MQTT_Response_QueueOtaFailure(output, request_id, code) :
+        MQTT_Response_Queue(topic, output, request_id, code);
+    if (!queued)
         APP_LOGE("RESP", "queue full rid=%s code=%u", request_id ? request_id : "", (unsigned)code);
     else
         APP_LOGI("RESP", "queued rid=%s code=%u", request_id ? request_id : "", (unsigned)code);
@@ -196,7 +125,12 @@ done:
     if (result) cJSON_Delete(result);
     if (data) cJSON_Delete(data);
     if (root) cJSON_Delete(root);
+    return queued;
 }
+
+static uint8_t build_response(ResponseTopic topic, const char* request_id, uint16_t code,
+                           WingAction action, uint8_t include_wing, cJSON* result)
+{ return build_response_with_policy(topic, request_id, code, action, include_wing, result, 0U); }
 
 static const char* boot_state_name(uint32_t state)
 {
@@ -277,7 +211,11 @@ static void handle_internal_config(const char* request_id, cJSON* params)
     if (strcmp(name, "clear_log") == 0) { AppLog_Clear(); build_response(RESP_INTERNAL_CONFIG, request_id, 200U, WING_ACTION_NONE, 0U, 0); return; }
     if (strcmp(name, "reboot") == 0)
     {
-        if (MQTT_App_IsMqttConfigTrialActive()) { build_response(RESP_INTERNAL_CONFIG, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
+        if (MQTT_App_IsMqttConfigTrialActive() || g_ota_request_state != OTA_REQ_IDLE || OtaService_IsBusy())
+        { build_response(RESP_INTERNAL_CONFIG, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
+        /* OTA owns this ID until its final response has been queued. */
+        copy_id(g_ota_request_id, request_id);
+        g_reset_response_topic = RESP_INTERNAL_CONFIG;
         g_mqtt_app_ota_reset_pending = 1U;
         g_mqtt_app_ota_reset_tick = 0U;
         g_mqtt_app_ota_request_tick = HAL_GetTick();
@@ -350,13 +288,14 @@ void MQTT_App_HandleOtaServiceTask(void)
             }
             APP_LOGI("OTA", "respond rid=%s code=%u", g_ota_request_id,
                      (unsigned)g_ota_response_code);
-            build_response(RESP_INTERNAL_OTA, g_ota_request_id, g_ota_response_code,
-                           WING_ACTION_NONE, 0U, result);
+            if (!build_response_with_policy(RESP_INTERNAL_OTA, g_ota_request_id, g_ota_response_code,
+                                WING_ACTION_NONE, 0U, result, g_ota_response_code != 200U)) return;
             if (g_ota_response_code == 200U)
             {
                 /* Start the reset watchdog only after MQTT has reconnected and
                  * the final response has actually been queued. */
                 g_mqtt_app_ota_request_tick = now;
+                g_reset_response_topic = RESP_INTERNAL_OTA;
                 g_mqtt_app_ota_reset_pending = 1U;
             }
             g_ota_request_state = OTA_REQ_IDLE;
@@ -479,4 +418,4 @@ done:
 }
 
 uint8_t MQTT_App_QueuePublicResponse(const char* payload, const char* id, uint16_t code)
-{ return queue_payload(RESP_CTRL, payload, id, code); }
+{ return MQTT_Response_Queue(RESP_CTRL, payload, id, code); }

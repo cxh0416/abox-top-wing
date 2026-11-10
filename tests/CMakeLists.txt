@@ -28,8 +28,10 @@ add_test(NAME test_anti_pinch_board COMMAND test_anti_pinch_board)
 wing_test(test_wing test_wing.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)
 wing_test(test_wing_controller test_wing_controller.c ${USER}/Src/wing_controller.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)
 wing_test(test_app_log test_app_log.c ${USER}/Src/app_log.c)
-wing_test(test_ota_response test_ota_response.c ${USER}/Src/mqtt_app_cmd.c)
-wing_test(test_mqtt_v4 test_mqtt_v4.c ${USER}/Src/mqtt_v4.c ${USER}/Src/mqtt_v4_store.c ${USER}/Src/mqtt_v4_persistence.c
+wing_test(test_ota_response test_ota_response.c ${USER}/Src/mqtt_app_cmd.c
+    ${USER}/Src/mqtt_response.c)
+wing_test(test_mqtt_v4 test_mqtt_v4.c ${USER}/Src/mqtt_v4.c
+    ${USER}/Src/mqtt_v4_report.c ${USER}/Src/mqtt_v4_store.c ${USER}/Src/mqtt_v4_persistence.c
     ${USER}/Src/wing_controller.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)
 wing_test(test_time_sync test_time_sync.c ${USER}/Src/time_base.c ${USER}/Src/time_sync.c)
 target_sources(test_wing_controller PRIVATE stubs/ultrasonic_motion.c)

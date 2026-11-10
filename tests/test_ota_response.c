@@ -11,6 +11,7 @@
 #include "cJSON.h"
 #include "mqtt_app.h"
 #include "mqtt_app_int.h"
+#include "mqtt_core.h"
 #include "ota_service.h"
 #include "wing_controller.h"
 
@@ -25,6 +26,9 @@ static uint8_t ota_install_ready;
 static uint8_t ota_failed;
 static uint32_t ota_error;
 static uint16_t wing_request_code;
+static ABoxMqttReceiptStatus publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+static uint64_t publish_operation;
+static unsigned stale_logs;
 
 char g_mqtt_app_device_id[64];
 char g_mqtt_app_heartbeat_topic[128];
@@ -32,7 +36,7 @@ char g_mqtt_app_ctrl_topic[128];
 char g_mqtt_app_ctrl_resp_topic[128];
 char g_mqtt_app_status_report_topic[128];
 char g_mqtt_app_internal_config_topic[128];
-char g_mqtt_app_internal_config_resp_topic[128];
+char g_mqtt_app_internal_config_resp_topic[128] = "/config/resp";
 char g_mqtt_app_internal_ota_topic[128];
 char g_mqtt_app_internal_ota_resp_topic[128] = "/ota/resp";
 char g_mqtt_app_log_topic[128];
@@ -60,6 +64,21 @@ void MQTT_App_HandleCommandMessage(const char* topic, const char* payload);
 uint32_t HAL_GetTick(void) { return fake_tick; }
 uint8_t MQTT_App_IsMqttConfigTrialActive(void) { return 0U; }
 uint8_t MQTT_Core_IsReady(void) { return mqtt_ready; }
+uint8_t MQTT_Core_PublishExTracked(const char* topic, const char* payload, uint8_t qos,
+                                   uint8_t retain, uint64_t* operation)
+{
+    assert(topic && payload && qos == 1U && retain == 0U);
+    *operation = ++publish_operation;
+    return 1U;
+}
+ABoxMqttReceiptStatus MQTT_Core_PublishResult(uint64_t operation)
+{
+    assert(operation == publish_operation);
+    return publish_receipt;
+}
+void MQTT_App_ResponseConfirmed(const char* request_id, uint16_t code)
+{ (void)request_id; (void)code; }
+void OtaService_AcknowledgeRollback(void) {}
 uint8_t OtaService_IsReady(void) { return ota_ready; }
 uint8_t OtaService_IsBusy(void) { return ota_busy; }
 uint8_t OtaService_Start(const OtaServiceRequest_t* request)
@@ -86,7 +105,7 @@ uint8_t TimeBase_FormatUtcMs(char* out, uint16_t out_sz)
 }
 void AppLog_Printf(AppLogLevel_t level, const char* tag, const char* fmt, ...)
 {
-    (void)level; (void)tag; (void)fmt;
+    if (level == APP_LOG_LEVEL_WARN && !strcmp(tag, "RESP") && strstr(fmt, "stale rid=")) ++stale_logs;
 }
 void AppLog_Clear(void) {}
 uint16_t AppLog_Dump(char* out, uint16_t out_sz)
@@ -222,5 +241,263 @@ int main(void)
     assert(!g_mqtt_app_ota_reset_pending);
     assert(response_code() == 500);
     assert(strstr(g_mqtt_app_resp_payload, "\"error\":77"));
+
+    MQTT_App_ResetResponseState();
+    g_mqtt_app_ota_reset_pending = 0U;
+    g_mqtt_app_ota_reset_tick = 0U;
+    params = ota_params();
+    MQTT_App_TestHandleOta("ota-full", params);
+    cJSON_Delete(params);
+    ota_install_ready = 1U;
+    mqtt_ready = 0U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(MQTT_App_QueuePublicResponse("{}", "other-1", 200U));
+    assert(MQTT_App_QueuePublicResponse("{}", "other-2", 200U));
+    assert(MQTT_App_QueuePublicResponse("{}", "other-3", 200U));
+    mqtt_ready = 1U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(MQTT_App_TestOtaRequestState() == 2U);
+    assert(!g_mqtt_app_ota_reset_pending);
+    g_mqtt_app_resp_pending = 0U;
+    MQTT_App_PromoteQueuedResponse();
+    fake_tick = 300U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(MQTT_App_TestOtaRequestState() == 0U);
+    assert(g_mqtt_app_ota_reset_pending);
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_ota_reset_tick);
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_ota_reset_tick);
+    assert(!strcmp(g_mqtt_app_resp_request_id, "other-3"));
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_ota_reset_tick);
+    assert(!strcmp(g_mqtt_app_resp_request_id, "ota-full"));
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_ota_reset_tick);
+    publish_receipt = ABOX_MQTT_RECEIPT_FAILED;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_ota_reset_tick);
+    assert(g_mqtt_app_resp_publish_active);
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    MQTT_App_HandlePendingResponseTask();
+    assert(g_mqtt_app_ota_reset_tick == 300U);
+
+    MQTT_App_ResetResponseState();
+    g_mqtt_app_ota_reset_pending = 0U;
+    g_mqtt_app_ota_reset_tick = 0U;
+    params = ota_params();
+    MQTT_App_TestHandleOta("ota-failed-full", params);
+    cJSON_Delete(params);
+    ota_failed = 1U;
+    ota_error = 77U;
+    mqtt_ready = 0U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(MQTT_App_QueuePublicResponse("{}", "failure-other-1", 200U));
+    assert(MQTT_App_QueuePublicResponse("{}", "failure-other-2", 200U));
+    assert(MQTT_App_QueuePublicResponse("{}", "failure-other-3", 200U));
+    mqtt_ready = 1U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(MQTT_App_TestOtaRequestState() == 2U);
+    assert(!g_mqtt_app_ota_reset_pending);
+    g_mqtt_app_resp_pending = 0U;
+    MQTT_App_PromoteQueuedResponse();
+    MQTT_App_HandleOtaServiceTask();
+    assert(MQTT_App_TestOtaRequestState() == 0U);
+    assert(!g_mqtt_app_ota_reset_pending);
+    g_mqtt_app_resp_pending = 0U;
+    MQTT_App_PromoteQueuedResponse();
+    g_mqtt_app_resp_pending = 0U;
+    MQTT_App_PromoteQueuedResponse();
+    assert(!strcmp(g_mqtt_app_resp_request_id, "ota-failed-full"));
+    assert(response_code() == 500);
+    assert(strstr(g_mqtt_app_resp_payload, "\"error\":77"));
+
+    /* An overlapping reboot must not interrupt or relabel an OTA transaction. */
+    MQTT_App_ResetResponseState();
+    g_mqtt_app_ota_reset_pending = 0U;
+    g_mqtt_app_ota_reset_tick = 0U;
+    fake_tick = 100U;
+    mqtt_ready = 0U;
+    params = ota_params();
+    MQTT_App_TestHandleOta("ota-A", params);
+    cJSON_Delete(params);
+    ota_install_ready = 1U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(MQTT_App_TestOtaRequestState() == 2U);
+    params = cJSON_CreateObject();
+    cJSON_AddStringToObject(params, "action", "reboot");
+    MQTT_App_TestHandleConfig("reboot-B", params);
+    cJSON_Delete(params);
+    assert(response_code() == 4003);
+    assert(!g_mqtt_app_ota_reset_pending);
+    mqtt_ready = 1U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(g_mqtt_app_ota_reset_pending);
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_ota_reset_tick);
+    assert(!strcmp(g_mqtt_app_resp_request_id, "ota-A"));
+    assert(strstr(g_mqtt_app_resp_payload, "\"requestId\":\"ota-A\""));
+
+    /* The OTA response survives the ordinary 8 s expiry and retries failures. */
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    fake_tick = 8100U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(g_mqtt_app_resp_pending && g_mqtt_app_resp_publish_active);
+    publish_receipt = ABOX_MQTT_RECEIPT_FAILED;
+    MQTT_App_HandlePendingResponseTask();
+    assert(g_mqtt_app_resp_pending && g_mqtt_app_resp_publish_active);
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    fake_tick = 9000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_resp_pending && g_mqtt_app_ota_reset_tick == 9000U);
+
+    /* Other responses still expire, but an already-confirmed response wins at the boundary. */
+    MQTT_App_ResetResponseState();
+    g_mqtt_app_ota_reset_pending = 0U;
+    fake_tick = 10000U;
+    assert(MQTT_App_QueuePublicResponse("{}", "ordinary", 200U));
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    fake_tick = 18000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_resp_pending);
+
+    MQTT_App_ResetResponseState();
+    fake_tick = 20000U;
+    params = cJSON_CreateObject();
+    cJSON_AddStringToObject(params, "action", "reboot");
+    MQTT_App_TestHandleConfig("reboot-C", params);
+    cJSON_Delete(params);
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    fake_tick = 28000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_resp_pending && g_mqtt_app_ota_reset_tick == 28000U);
+
+    /* Failed OTA results retry for 45 s, then release the next response. */
+    MQTT_App_ResetResponseState();
+    g_mqtt_app_ota_reset_pending = 0U;
+    g_mqtt_app_ota_reset_tick = 0U;
+    fake_tick = 100000U;
+    mqtt_ready = 0U;
+    params = ota_params();
+    MQTT_App_TestHandleOta("ota-failure-retry", params);
+    cJSON_Delete(params);
+    ota_failed = 1U;
+    ota_error = 77U;
+    MQTT_App_HandleOtaServiceTask();
+    mqtt_ready = 1U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(response_code() == 500 && strstr(g_mqtt_app_resp_payload, "\"error\":77"));
+    assert(MQTT_App_QueuePublicResponse("{}", "after-failure", 200U));
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    fake_tick = 108000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(g_mqtt_app_resp_pending && g_mqtt_app_resp_publish_active);
+    fake_tick = 115000U;
+    publish_receipt = ABOX_MQTT_RECEIPT_FAILED;
+    uint64_t previous_operation = publish_operation;
+    MQTT_App_HandlePendingResponseTask();
+    assert(publish_operation == previous_operation + 1U);
+    assert(g_mqtt_app_resp_pending && g_mqtt_app_resp_publish_active);
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    fake_tick = 144999U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!strcmp(g_mqtt_app_resp_request_id, "ota-failure-retry"));
+    unsigned logs_before_timeout = stale_logs;
+    fake_tick = 145000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!strcmp(g_mqtt_app_resp_request_id, "after-failure"));
+    assert(stale_logs == logs_before_timeout + 1U);
+    assert(!g_mqtt_app_ota_reset_pending && !g_mqtt_app_ota_reset_tick);
+    fake_tick = 153000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_resp_pending);
+
+    /* A queued final failure retains its policy when promoted; confirmation wins at the deadline. */
+    MQTT_App_ResetResponseState();
+    fake_tick = 200000U;
+    params = ota_params();
+    MQTT_App_TestHandleOta("ota-failure-queued", params);
+    cJSON_Delete(params);
+    ota_failed = 1U;
+    ota_error = 88U;
+    mqtt_ready = 0U;
+    MQTT_App_HandleOtaServiceTask();
+    assert(MQTT_App_QueuePublicResponse("{}", "before-failure", 200U));
+    mqtt_ready = 1U;
+    MQTT_App_HandleOtaServiceTask();
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!strcmp(g_mqtt_app_resp_request_id, "ota-failure-queued"));
+    assert(strstr(g_mqtt_app_resp_payload, "\"error\":88"));
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    fake_tick = 208000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(g_mqtt_app_resp_pending);
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    fake_tick = 245000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_resp_pending && !g_mqtt_app_ota_reset_pending);
+
+    /* An immediate OTA rejection remains an ordinary 8 s response. */
+    MQTT_App_ResetResponseState();
+    fake_tick = 300000U;
+    ota_ready = 0U;
+    params = ota_params();
+    MQTT_App_TestHandleOta("ota-not-ready", params);
+    cJSON_Delete(params);
+    ota_ready = 1U;
+    assert(response_code() == 500);
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    fake_tick = 308000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_resp_pending);
+
+    /* Disconnection and tick rollover do not discard a failure before its deadline. */
+    MQTT_App_ResetResponseState();
+    fake_tick = UINT32_MAX - 1000U;
+    params = ota_params();
+    MQTT_App_TestHandleOta("ota-reconnect", params);
+    cJSON_Delete(params);
+    ota_failed = 1U;
+    ota_error = 99U;
+    mqtt_ready = 0U;
+    MQTT_App_HandleOtaServiceTask();
+    mqtt_ready = 1U;
+    MQTT_App_HandleOtaServiceTask();
+    publish_receipt = ABOX_MQTT_RECEIPT_PENDING;
+    MQTT_App_HandlePendingResponseTask();
+    previous_operation = publish_operation;
+    mqtt_ready = 0U;
+    publish_receipt = ABOX_MQTT_RECEIPT_FAILED;
+    fake_tick += 44000U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(g_mqtt_app_resp_pending && !g_mqtt_app_resp_publish_active);
+    assert(publish_operation == previous_operation);
+    mqtt_ready = 1U;
+    MQTT_App_HandlePendingResponseTask();
+    assert(publish_operation == previous_operation + 1U);
+    publish_receipt = ABOX_MQTT_RECEIPT_CONFIRMED;
+    MQTT_App_HandlePendingResponseTask();
+    assert(!g_mqtt_app_resp_pending && !g_mqtt_app_ota_reset_pending);
     return 0;
 }

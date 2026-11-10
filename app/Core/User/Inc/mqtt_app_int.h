@@ -44,6 +44,8 @@ uint16_t MQTT_App_MqttTrialReply(const char* id,const char* vid,const char* host
     uint16_t port,const char* user,const char* password);
 uint8_t MQTT_App_QueueMqttTrialResponse(const char* request_id, uint16_t code);
 void MQTT_App_ResponseConfirmed(const char* request_id, uint16_t code);
+void MQTT_App_ResetResponseConfirmed(const char* topic, const char* request_id, uint16_t code);
+uint8_t MQTT_App_IsOtaResetResponse(const char* topic, const char* request_id, uint16_t code);
 void MQTT_App_HandleCommandMessage(const char* topic, const char* payload);
 void MQTT_App_HandleWingResultTask(void);
 void MQTT_App_HandlePendingResponseTask(void);

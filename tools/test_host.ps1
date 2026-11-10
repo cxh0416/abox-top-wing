@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string] $Compiler = 'D:/MinGW/bin/gcc.exe')
+param([string] $Compiler = 'gcc')
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $build = Join-Path $root 'build/host'

@@ -75,8 +75,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/User/Src/board_config.c
     Core/User/Src/mqtt_app.c
     Core/User/Src/mqtt_app_cmd.c
+    Core/User/Src/mqtt_response.c
     Core/User/Src/mqtt_app_hb.c
     Core/User/Src/mqtt_v4.c
+    Core/User/Src/mqtt_v4_report.c
     Core/User/Src/mqtt_v4_store.c
     Core/User/Src/mqtt_v4_persistence.c
     Core/User/Src/mqtt_runtime.c

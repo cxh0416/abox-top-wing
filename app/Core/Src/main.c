@@ -199,7 +199,7 @@ int main(void)
 
     BoardConfig_Load();
     AppLog_SetLevel((AppLogLevel_t)BoardConfig_Get()->diag_log_level);
-    WingController_Init();
+    if (!WingController_Init()) APP_LOGE("APP", "wing CAN initialization failed");
 
     MQTT_ConfigInit();
 

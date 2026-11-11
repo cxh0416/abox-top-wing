@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 typedef struct { uint8_t instance; } CAN_HandleTypeDef;
+typedef enum { HAL_CAN_STATE_RESET, HAL_CAN_STATE_LISTENING } HAL_CAN_StateTypeDef;
+HAL_CAN_StateTypeDef HAL_CAN_GetState(const CAN_HandleTypeDef* hcan);
 typedef struct
 {
     uint32_t ExtId;

@@ -16,6 +16,10 @@ static uint16_t g_tx_count;
 static uint8_t g_rx[8];
 static uint8_t g_have_rx;
 static uint8_t g_fail_tx;
+static HAL_CAN_StateTypeDef g_can_state = HAL_CAN_STATE_LISTENING;
+static unsigned g_can_init_calls;
+HAL_CAN_StateTypeDef HAL_CAN_GetState(const CAN_HandleTypeDef* hcan)
+{ assert(hcan == &hcan2); return g_can_state; }
 static uint8_t g_power_output;
 void HAL_GPIO_WritePin(void *port, uint16_t pin, uint8_t value)
 {
@@ -60,10 +64,10 @@ int HAL_CAN_GetRxMessage(CAN_HandleTypeDef* hcan, uint32_t fifo,
 }
 
 int HAL_CAN_ConfigFilter(CAN_HandleTypeDef* hcan, CAN_FilterTypeDef* filter)
-{ (void)hcan; (void)filter; return HAL_OK; }
-int HAL_CAN_Start(CAN_HandleTypeDef* hcan) { (void)hcan; return HAL_OK; }
+{ (void)hcan; (void)filter; ++g_can_init_calls; return HAL_OK; }
+int HAL_CAN_Start(CAN_HandleTypeDef* hcan) { (void)hcan; ++g_can_init_calls; return HAL_OK; }
 int HAL_CAN_ActivateNotification(CAN_HandleTypeDef* hcan, uint32_t notification)
-{ (void)hcan; (void)notification; return HAL_OK; }
+{ (void)hcan; (void)notification; ++g_can_init_calls; return HAL_OK; }
 
 static void reset_controller(void)
 {
@@ -77,7 +81,9 @@ static void reset_controller(void)
     g_have_rx = 0U;
     g_fail_tx = 0U;
     WingPower_Init();
-    WingController_Init();
+    g_can_state = HAL_CAN_STATE_LISTENING;
+    g_can_init_calls = 0U;
+    assert(WingController_Init() && g_can_init_calls == 0U);
 }
 
 static void receive(const uint8_t data[8], uint32_t tick)
@@ -723,6 +729,16 @@ static void test_ultrasonic_near_retraction_suppression(void)
 
 int main(void)
 {
+    reset_controller();
+    g_can_state = HAL_CAN_STATE_RESET;
+    assert(!WingController_Init());
+    assert(g_can_init_calls == 0U);
+    assert(WingController_Request(WING_ACTION_ASCEND, "not-ready") == 5001U);
+    assert(WingController_Request(WING_ACTION_STOP, "stop-not-ready") == 5001U);
+    assert(WingController_CheckPowerOff("power-not-ready") == 5001U);
+    assert(g_tx_count == 0U);
+    g_can_state = HAL_CAN_STATE_LISTENING;
+    assert(WingController_Init());
     test_idle_silent_and_correlation();
     test_preflight_local_motion_rejected();
     test_preflight_timeouts_and_limits();

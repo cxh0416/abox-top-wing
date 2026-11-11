@@ -53,7 +53,7 @@ typedef struct
     uint32_t tick;
 } WingReport;
 
-void WingController_Init(void);
+uint8_t WingController_Init(void);
 void WingController_Task(uint32_t now);
 /* Main-loop only. A confirmed descent enables protection over the full stroke. */
 void WingController_AntiPinch(uint8_t pressed, uint8_t trigger);

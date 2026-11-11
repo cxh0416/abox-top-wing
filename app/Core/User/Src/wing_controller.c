@@ -51,6 +51,7 @@ typedef struct
 } WingSession;
 
 static WingState g_state;
+static uint8_t g_can_ready;
 static WingSession g_session;
 static WingControlResult g_results[RESULT_QUEUE_DEPTH];
 static uint8_t g_result_head;
@@ -181,6 +182,7 @@ static uint8_t send_frame(const uint8_t data[8])
 {
     CAN_TxHeaderTypeDef header;
     uint32_t mailbox;
+    if (!g_can_ready) return 0U;
     memset(&header, 0, sizeof(header));
     header.ExtId = WING_CAN_TX_ID;
     header.IDE = CAN_ID_EXT;
@@ -521,31 +523,30 @@ static void assess_running_status(uint32_t now)
     else g_session.conflict_samples = 0U;
 }
 
-void WingController_Init(void)
+uint8_t WingController_Init(void)
 {
     memset(&g_pinch, 0, sizeof(g_pinch));
     g_pinch_pressed = 0U;
     g_have_confirmed_stop = 0U;
-    CAN_FilterTypeDef filter;
+    g_can_ready = 0U;
     WingState_Init(&g_state);
     clear_session();
     sync_ultrasonic_suppression();
     sync_anti_pinch_scope();
     g_result_head = g_result_count = 0U;
     g_report_head = g_report_count = 0U;
-    memset(&filter, 0, sizeof(filter));
-    filter.FilterBank = TOP_WING_CAN_BUS == 1 ? 0U : 14U;
-    filter.FilterMode = CAN_FILTERMODE_IDMASK;
-    filter.FilterScale = CAN_FILTERSCALE_32BIT;
-    filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
-    filter.FilterActivation = ENABLE;
-    filter.SlaveStartFilterBank = 14U;
-    (void)HAL_CAN_ConfigFilter(selected_can(), &filter);
-    (void)HAL_CAN_Start(selected_can());
-    (void)HAL_CAN_ActivateNotification(selected_can(), CAN_IT_RX_FIFO0_MSG_PENDING);
+    /* MX_CANx_Init owns filter, start and RX interrupt setup and checks each
+     * HAL result. Starting an already listening STM32 CAN returns HAL_ERROR. */
+    if (HAL_CAN_GetState(selected_can()) != HAL_CAN_STATE_LISTENING)
+    {
+        APP_LOGE("WING", "CAN%u is not listening", (unsigned)TOP_WING_CAN_BUS);
+        return 0U;
+    }
+    g_can_ready = 1U;
     APP_LOGI("WING", "CAN%u remote-session idle=silent tx=0x%08lX rx=0x%08lX",
              (unsigned)TOP_WING_CAN_BUS, (unsigned long)WING_CAN_TX_ID,
              (unsigned long)WING_CAN_RX_ID);
+    return 1U;
 }
 
 static uint16_t controller_request(WingAction action, const char* request_id, uint8_t untracked_stop)
@@ -555,6 +556,7 @@ static uint16_t controller_request(WingAction action, const char* request_id, ui
     if (!request_id || (!request_id[0] && !(untracked_stop && action == WING_ACTION_STOP)) ||
         action == WING_ACTION_NONE) return 4001U;
     if (!WingPower_IsOn()) return 5002U;
+    if (!g_can_ready) return 5001U;
 
     if (action == WING_ACTION_STOP)
     {
@@ -616,6 +618,7 @@ uint16_t WingController_CheckPowerOff(const char* request_id)
     __disable_irq();
     if (!request_id || !request_id[0]) code = 4001U;
     else if (!WingPower_IsOn()) code = 5002U;
+    else if (!g_can_ready) code = 5001U;
     else if (g_session.state != SESSION_IDLE || g_pinch.phase != PINCH_NONE || g_pinch_pressed) code = 4003U;
     else
     {

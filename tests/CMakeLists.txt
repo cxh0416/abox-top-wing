@@ -19,6 +19,7 @@ endfunction()
 wing_test(test_wing test_wing.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)
 wing_test(test_wing_controller test_wing_controller.c ${USER}/Src/wing_controller.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)
 wing_test(test_app_log test_app_log.c ${USER}/Src/app_log.c)
+wing_test(test_board_config test_board_config.c ${USER}/Src/board_config.c)
 wing_test(test_ota_response test_ota_response.c ${USER}/Src/mqtt_app_cmd.c)
 wing_test(test_mqtt_v4 test_mqtt_v4.c ${USER}/Src/mqtt_v4.c ${USER}/Src/mqtt_v4_store.c ${USER}/Src/mqtt_v4_persistence.c
     ${USER}/Src/wing_controller.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)

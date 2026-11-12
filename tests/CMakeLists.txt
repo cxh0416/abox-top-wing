@@ -28,6 +28,7 @@ add_test(NAME test_anti_pinch_board COMMAND test_anti_pinch_board)
 wing_test(test_wing test_wing.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)
 wing_test(test_wing_controller test_wing_controller.c ${USER}/Src/wing_controller.c ${USER}/Src/wing_protocol.c ${USER}/Src/wing_state.c)
 wing_test(test_app_log test_app_log.c ${USER}/Src/app_log.c)
+target_compile_definitions(test_app_log PRIVATE APP_LOG_IRQ_TEST)
 wing_test(test_ota_response test_ota_response.c ${USER}/Src/mqtt_app_cmd.c
     ${USER}/Src/mqtt_response.c)
 wing_test(test_mqtt_v4 test_mqtt_v4.c ${USER}/Src/mqtt_v4.c

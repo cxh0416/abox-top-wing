@@ -15,9 +15,19 @@ void NVIC_SystemReset(void);
 #define HAL_GetUIDw0() (0x12345678U)
 #define HAL_GetUIDw1() (0x9ABCDEF0U)
 #define HAL_GetUIDw2() (0x13579BDFU)
+#ifdef APP_LOG_IRQ_TEST
+uint32_t AppLogTest_GetPrimask(void);
+void AppLogTest_DisableIrq(void);
+void AppLogTest_SetPrimask(uint32_t value);
+#define __disable_irq() AppLogTest_DisableIrq()
+#define __enable_irq() AppLogTest_SetPrimask(0U)
+#define __get_PRIMASK() AppLogTest_GetPrimask()
+#define __set_PRIMASK(value) AppLogTest_SetPrimask(value)
+#else
 #define __disable_irq() ((void)0)
 #define __enable_irq() ((void)0)
 #define __get_PRIMASK() (0U)
 #define __set_PRIMASK(value) ((void)(value))
+#endif
 
 #endif

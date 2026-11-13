@@ -8,6 +8,9 @@
 #include "mqtt_v4_store.h"
 #include "ota_service.h"
 #include "usart.h"
+#ifdef ABOX_MCU_GD32F105
+#include "abox_modem_port.h"
+#endif
 #include "wing_enrollment.h"
 
 static ABoxAppService service;
@@ -18,10 +21,16 @@ static uint8_t enabled;
 static int restart_rx(void *context)
 {
     (void)context;
+#ifdef ABOX_MCU_GD32F105
+    if (!ABoxModemPort_AbortRx()) return 0;
+    ABoxEc800Rx_AfterRestart(service.rx);
+    return ABoxModemPort_StartRx(service.rx->dma_buffer, service.rx->dma_size);
+#else
     if (HAL_UART_AbortReceive(&huart1) != HAL_OK) return 0;
     ABoxEc800Rx_AfterRestart(service.rx);
     return HAL_UARTEx_ReceiveToIdle_DMA(&huart1, service.rx->dma_buffer,
                                       service.rx->dma_size) == HAL_OK;
+#endif
 }
 static int communication_enabled(void *context)
 {

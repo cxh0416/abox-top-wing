@@ -7,6 +7,9 @@
 #include "app_version.h"
 #include "board_config.h"
 #include "boot_cfg.h"
+#include "boot_state.h"
+#include "ota_info.h"
+#include "abox_platform_port.h"
 #include "mqtt_app.h"
 #include "mqtt_core.h"
 #include "mqtt_runtime.h"
@@ -15,6 +18,25 @@
 
 typedef struct { Ec800AtCore_t *at; ABoxBootV2AtDoneFn done; void *done_user; ABoxBootV2AtEventFn events; void *events_user; } OtaAdapter_t;
 static OtaAdapter_t g_adapter;
+static const ABoxBootV2Layout g_layout = {BOOT_STATE_A_ADDR,BOOT_STATE_B_ADDR,BOOT_STATE_PAGE_SIZE,APP_START_ADDR,APP_END_ADDR,0x20000000U,0x20010000U};
+static uint8_t bind_layout(void) { return (uint8_t)ABoxBootV2_StateBindLayout(&g_layout); }
+static uint8_t state_pages_blank(void)
+{
+ uint8_t bytes[32]; const uint32_t pages[] = {BOOT_STATE_A_ADDR, BOOT_STATE_B_ADDR};
+ for (unsigned p=0; p<2U; ++p) for (uint32_t off=0; off<BOOT_STATE_PAGE_SIZE; off+=sizeof(bytes)) {
+  if (!ABox_PortFlashRead(pages[p]+off, bytes, sizeof(bytes))) return 0U;
+  for (unsigned i=0; i<sizeof(bytes); ++i) if (bytes[i]!=0xFFU) return 0U;
+ }
+ return 1U;
+}
+uint8_t OtaService_ConfigWriteAllowed(void)
+{
+ BootStateRecord_t state;
+ if (!bind_layout() || ABoxBootV2App_IsBusy()) return 0U;
+ if (!BootState_Load(&state)) return state_pages_blank();
+ return (state.state == BOOT_STATE_NORMAL || state.state == BOOT_STATE_CONFIRMED) &&
+        state.image_size <= APP_MAX_SIZE && state.stable_image_size <= APP_MAX_SIZE;
+}
 static uint8_t g_idem_workspace_borrowed;
 static uint8_t g_ota_transfer_buffer[MQTT_V4_IDEM_WORKSPACE_SIZE]
     __attribute__((section(".ota_work"), aligned(4)));
@@ -30,12 +52,13 @@ static void event(Ec800AtEvent_t e,const uint8_t*d,uint16_t n,void*u){OtaAdapter
 static int events(void*c,ABoxBootV2AtEventFn f,void*u){OtaAdapter_t*a=c;a->events=f;a->events_user=u;return EC800_AT_RegisterUrcHandler(a->at,EC800_AT_OWNER_OTA,event,a);}
 static uint8_t mqtt_client(void*c){(void)c;return MQTT_Core_ClientIndex();}
 static int mqtt_stop(void*c,uint32_t n){(void)c;return MqttRuntime_StopFirst(n);}
+static uint8_t boot_matches(void);
 static int may_start_seed(void*c)
 {
  (void)c;
  /* Wait for first enrollment to commit and for MQTT to connect. A maintenance
   * credential trial must also finish before background seeding stops MQTT. */
- return BoardConfig_HasMqttCredentials() && MQTT_Core_IsReady() &&
+ return boot_matches() && BoardConfig_HasMqttCredentials() && MQTT_Core_IsReady() &&
         !MQTT_App_IsMqttConfigTrialActive();
 }
 static int borrow(void*c){(void)c;return MQTT_Core_BorrowWorkspace();}
@@ -43,14 +66,50 @@ static void release(void*c){(void)c;MQTT_Core_ReturnWorkspace();}
 static void pause(void*c,uint8_t p){(void)c;MQTT_Core_SetPaused(p);}
 static void logline(void*c,uint8_t l,const char*m){(void)c;if(l>=3U)APP_LOGE("OTA","%s",m);else if(l==2U)APP_LOGW("OTA","%s",m);else APP_LOGI("OTA","%s",m);}
 static uint32_t overflow(void*c){OtaAdapter_t*a=c;return EC800_AT_RxOverflowCount(a->at);}
+static uint8_t version_matches(const char *version, uint8_t gd32)
+{
+ static const char prefix[] = "top-flying-wing-";
+ const char *p = version;
+ if (!p || strncmp(p, prefix, sizeof(prefix)-1U)) return 0U;
+ p += sizeof(prefix)-1U;
+ for (unsigned part=0; part<3U; ++part) {
+  if (*p<'0' || *p>'9') return 0U;
+  while (*p>='0' && *p<='9') ++p;
+  if (part<2U && *p++!='.') return 0U;
+ }
+ return gd32 ? !strcmp(p,"-gd") : (!*p || !strcmp(p,"-st"));
+}
+static uint8_t descriptor_matches(const ABoxBootV2Descriptor *descriptor, uint8_t gd32)
+{
+ if (!descriptor) return 0U;
+ return !strncmp(descriptor->product_id, gd32 ? "abox_gd32f105" : "abox_stm32f105",
+                 sizeof(descriptor->product_id));
+}
+#ifdef TOP_WING_HOST_TEST
+uint8_t WingOta_TestVersionMatches(const char *version, uint8_t gd32) { return version_matches(version, gd32); }
+uint8_t WingOta_TestDescriptorMatches(const ABoxBootV2Descriptor *d, uint8_t gd32) { return descriptor_matches(d, gd32); }
+extern uint8_t WingOta_TestBootMatches(void);
+static uint8_t boot_matches(void) { return WingOta_TestBootMatches(); }
+#else
+static uint8_t boot_matches(void)
+{
+ ABoxBootV2Descriptor descriptor;
+ if (!ABoxBootV2_DescriptorRead(&descriptor)) return 0U;
+#ifdef ABOX_MCU_GD32F105
+ return descriptor_matches(&descriptor, 1U);
+#else
+ return descriptor_matches(&descriptor, 0U);
+#endif
+}
+#endif
 
 void OtaService_Init(Ec800AtCore_t *at)
 {
- static ABoxBootV2AppPort p;static ABoxBootV2AppConfig c;static const ABoxBootV2Layout layout={BOOT_STATE_A_ADDR,BOOT_STATE_B_ADDR,BOOT_STATE_PAGE_SIZE,APP_START_ADDR,APP_END_ADDR,0x20000000U,0x20010000U};extern uint8_t __app_image_end;
+ static ABoxBootV2AppPort p;static ABoxBootV2AppConfig c;extern uint8_t __app_image_end;
  memset(&g_adapter,0,sizeof(g_adapter));g_adapter.at=at;memset(&p,0,sizeof(p));p.context=&g_adapter;p.tick_ms=tick;p.submit=submit;p.send_payload=send;p.begin_raw_read=raw;p.has_pending=pending;p.is_active=active;p.cancel=cancel;p.register_events=events;p.mqtt_pause=pause;p.log=logline;p.transfer_buffer=g_ota_transfer_buffer;p.transfer_buffer_size=sizeof(g_ota_transfer_buffer);p.rx_overflow_count=overflow;
  memset(&c,0,sizeof(c));c.ota_origin="https://ota.zxwl.ntiov.com:20443";c.revision_product="top_flying_wing";c.artifact_name="top_flying_wing_app.bin";c.version_prefix="top-flying-wing-";c.running_version=TopFlyingWing_AppFwVersion();c.ca_pem=(const uint8_t*)g_ota_ca_pem;c.ca_pem_length=(uint32_t)(sizeof(g_ota_ca_pem)-1U);c.app_start_addr=APP_START_ADDR;c.app_size=(uint32_t)(&__app_image_end-(uint8_t*)APP_START_ADDR);c.app_max_size=APP_MAX_SIZE;
  p.mqtt_client_index=mqtt_client;p.mqtt_stop=mqtt_stop;p.workspace_borrow=borrow;p.workspace_return=release;p.may_start_seed=may_start_seed;
- (void)ABoxBootV2_StateBindLayout(&layout);if(!ABoxBootV2App_Init(&p,&c))APP_LOGE("OTA","initialization failed");
+ (void)bind_layout();if(!ABoxBootV2App_Init(&p,&c))APP_LOGE("OTA","initialization failed");
 }
 uint8_t* OtaService_IdemWorkspace(void) { return g_ota_transfer_buffer; }
 int OtaService_AcquireIdemWorkspace(void)
@@ -67,7 +126,17 @@ void OtaService_Task(void)
  if (g_idem_workspace_borrowed) return;
  ABoxBootV2App_Task();
 }
-uint8_t OtaService_IsProvisioned(void){return(uint8_t)ABoxBootV2App_IsProvisioned();}uint8_t OtaService_IsReady(void){return(uint8_t)ABoxBootV2App_IsReady();}uint8_t OtaService_IsBusy(void){return(uint8_t)ABoxBootV2App_IsBusy();}
+uint8_t OtaService_IsProvisioned(void){return(uint8_t)ABoxBootV2App_IsProvisioned();}uint8_t OtaService_IsReady(void){return boot_matches() && (uint8_t)ABoxBootV2App_IsReady();}uint8_t OtaService_IsBusy(void){return(uint8_t)ABoxBootV2App_IsBusy();}
 const char*OtaService_Phase(void){return ABoxBootV2App_Phase();}const char*OtaService_TargetVersion(void){return ABoxBootV2App_TargetVersion();}uint32_t OtaService_LastError(void){return ABoxBootV2App_LastError();}
-uint8_t OtaService_Start(const OtaServiceRequest_t*r){ABoxBootV2AppRequest c;if(!r || g_idem_workspace_borrowed)return 0U;memcpy(&c,r,sizeof(c));return(uint8_t)ABoxBootV2App_Start(&c);}
+uint8_t OtaService_Start(const OtaServiceRequest_t*r){ABoxBootV2AppRequest c;
+#ifdef ABOX_MCU_GD32F105
+ const uint8_t gd32=1U;
+#else
+ const uint8_t gd32=0U;
+#endif
+ if (!r || !boot_matches() || !version_matches(r->version,gd32) ||
+     g_idem_workspace_borrowed || !OTA_Info_PrepareExternalWrite()) return 0U;
+ memcpy(&c,r,sizeof(c));
+ return (uint8_t)ABoxBootV2App_Start(&c);
+}
 uint8_t OtaService_TakeInstallReady(void){return(uint8_t)ABoxBootV2App_TakeInstallReady();}uint8_t OtaService_TakeFailure(uint32_t*e){return(uint8_t)ABoxBootV2App_TakeFailure(e);}void OtaService_AcknowledgeRollback(void){(void)ABoxBootV2_AcknowledgeRollback();}

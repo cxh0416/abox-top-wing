@@ -6,9 +6,11 @@
 #include "board_config.h"
 
 static BoardConfigStore_t stored;
+static uint8_t load_ok = 1U;
 
 uint8_t OTA_Info_LoadBoardConfig(BoardConfigStore_t *cfg)
 {
+    if (!load_ok) return 0U;
     *cfg = stored;
     return 1U;
 }
@@ -52,6 +54,15 @@ int main(void)
     BoardConfig_Load();
     assert(BoardConfig_HasMqttCredentials());
     assert(BoardConfig_Get()->flags & BOARD_CONFIG_FLAG_MQTT_TLS);
+
+    load_ok = 0U;
+    BoardConfig_Load();
+    assert(!BoardConfig_HasMqttCredentials());
+    assert(!BoardConfig_StorageReady());
+    load_ok = 1U;
+    BoardConfig_Load();
+    assert(BoardConfig_HasMqttCredentials());
+    assert(BoardConfig_StorageReady());
 
     cfg.mqtt_password[0] = '\0';
     assert(BoardConfig_Save(&cfg));

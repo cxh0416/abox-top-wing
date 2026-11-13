@@ -2,11 +2,16 @@
 #include <string.h>
 #include "abox_enrollment_service.h"
 #include "abox_enrollment_ca_pem.h"
+#ifdef ABOX_MCU_GD32F105
+#include "abox_target_identity.h"
+#else
 #include "abox_stm32f105_ec800_identity.h"
+#endif
 #include "abox_mqtt_trial_executor.h"
 #include "app_version.h"
 #include "app_log.h"
 #include "board_config.h"
+#include "ota_info.h"
 #include "ec_power.h"
 #include "mqtt_app_int.h"
 #include "mqtt_core.h"
@@ -33,7 +38,7 @@ static int needed(void* user) { (void)user; return !BoardConfig_HasMqttCredentia
 static int ready(void* user)
 {
     (void)user;
-    if (!EC_Power_IsOnDone() || !OtaService_IsProvisioned() || OtaService_IsBusy() ||
+    if (!BoardConfig_StorageReady() || !OTA_Info_Recover() || !EC_Power_IsOnDone() || !OtaService_IsProvisioned() || OtaService_IsBusy() ||
         MQTT_V4_StoreBusy() || ABoxEc800At_IsBusy(MQTT_Core_AtCore())) return 0;
     if (!MQTT_Core_IsIccidValid()) { MQTT_Core_RequestIccid(); return 0; }
     return 1;
@@ -43,9 +48,17 @@ static int identity(void* user, ABoxEnrollmentIdentity* out)
 {
     (void)user;
     const BoardConfigStore_t* config = BoardConfig_Get();
+#ifdef ABOX_MCU_GD32F105
+    return ABoxTargetIdentity_Build(out, &identity_storage, MQTT_Core_GetIccid(),
+#else
     return ABoxStm32F105Ec800Identity_Build(out, &identity_storage, MQTT_Core_GetIccid(),
+#endif
         config->vid, BoardConfig_HasMqttCredentials(), "TFW-",
+#ifdef ABOX_MCU_GD32F105
+        "top_flying_wing_gd32f105_ec800_v1", TopFlyingWing_AppFwVersion());
+#else
         "top_flying_wing_stm32f105_ec800_v1", TopFlyingWing_AppFwVersion());
+#endif
 }
 static int start_trial(void* user, const ABoxEnrollmentCredential* c)
 {

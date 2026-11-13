@@ -4,8 +4,18 @@
 #include "ota_service.h"
 #include "mqtt_v4_store.h"
 #include "abox_boot_v2_app.h"
+#include "abox_boot_v2.h"
 #include "app_log.h"
+#include "boot_state.h"
 
+static uint8_t prepare_allowed = 1U;
+static uint8_t boot_matches = 1U;
+uint8_t WingOta_TestBootMatches(void) { return boot_matches; }
+uint8_t WingOta_TestVersionMatches(const char *version, uint8_t gd32);
+uint8_t WingOta_TestDescriptorMatches(const ABoxBootV2Descriptor *, uint8_t gd32);
+uint8_t OTA_Info_PrepareExternalWrite(void) { return prepare_allowed; }
+static BootStateRecord_t boot_state;
+uint8_t BootState_Load(BootStateRecord_t *out) { *out = boot_state; return 1U; }
 uint8_t __app_image_end;
 static int busy, starts, provisions, polls, credentials, mqtt_ready, config_trial, provisioned=1;
 static const char *phase="IDLE";
@@ -40,8 +50,30 @@ int main(void)
 {
     Ec800AtCore_t at={0};
     OtaServiceRequest_t request={0};
+    ABoxBootV2Descriptor descriptor = {0};
+    strcpy(descriptor.product_id, "abox_gd32f105");
+    assert(WingOta_TestDescriptorMatches(&descriptor, 1U));
+    assert(!WingOta_TestDescriptorMatches(&descriptor, 0U));
+    strcpy(descriptor.product_id, "abox_stm32f105");
+    assert(WingOta_TestDescriptorMatches(&descriptor, 0U));
+    assert(!WingOta_TestDescriptorMatches(&descriptor, 1U));
+    strcpy(request.version, "top-flying-wing-1.2.0");
+    assert(WingOta_TestVersionMatches("top-flying-wing-1.2.0-gd", 1U));
+    assert(!WingOta_TestVersionMatches("top-flying-wing-1.2.0", 1U));
+    assert(!WingOta_TestVersionMatches("top-flying-wing-1.2.0-gd", 0U));
+    assert(!WingOta_TestVersionMatches("top-flying-wing-1.2.0-gd-wip", 0U));
+    assert(!WingOta_TestVersionMatches("top-flying-wing-x.2.0-gd", 1U));
+    assert(WingOta_TestVersionMatches("top-flying-wing-1.2.0", 0U));
     assert(!OtaService_AcquireIdemWorkspace());
     OtaService_Init(&at);
+    boot_state.state = BOOT_STATE_TRIAL;
+    assert(!OtaService_ConfigWriteAllowed());
+    boot_state.state = BOOT_STATE_CONFIRMED;
+    boot_state.stable_image_size = APP_MAX_SIZE + 1U;
+    assert(!OtaService_ConfigWriteAllowed());
+    boot_state.stable_image_size = APP_MAX_SIZE;
+    assert(OtaService_ConfigWriteAllowed());
+    busy = 1; assert(!OtaService_ConfigWriteAllowed()); busy = 0;
     assert(captured && captured->transfer_buffer==OtaService_IdemWorkspace());
     assert(captured->transfer_buffer_size==MQTT_V4_IDEM_WORKSPACE_SIZE);
     assert(captured->may_start_seed && !captured->may_start_seed(captured->context)); /* empty board */
@@ -59,9 +91,13 @@ int main(void)
     busy=0; mqtt_ready=1; config_trial=1;
     assert(!captured->may_start_seed(captured->context)); /* maintenance trial */
     config_trial=0; assert(captured->may_start_seed(captured->context));
+    boot_matches=0; assert(!captured->may_start_seed(captured->context));
+    assert(!OtaService_IsReady() && !OtaService_Start(&request)); boot_matches=1;
     OtaService_Task(); assert(polls==5); /* seed can start */
     credentials=0; assert(!captured->may_start_seed(captured->context));
     mqtt_ready=0; OtaService_Task(); assert(polls==6); /* empty board */
+    prepare_allowed=0; assert(!OtaService_Start(&request) && !starts);
+    prepare_allowed=1;
     assert(OtaService_Start(&request) && starts==1 && !OtaService_AcquireIdemWorkspace());
     OtaService_Task();assert(polls==7);
     busy=0;assert(OtaService_BeginProvisioning() && !OtaService_AcquireIdemWorkspace());

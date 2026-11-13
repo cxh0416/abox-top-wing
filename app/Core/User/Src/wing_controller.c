@@ -284,11 +284,14 @@ static void assess_running_status(uint32_t now)
 void WingController_Init(void)
 {
     g_have_confirmed_stop = 0U;
+#ifndef ABOX_MCU_GD32F105
     CAN_FilterTypeDef filter;
+#endif
     WingState_Init(&g_state);
     clear_session();
     g_result_head = g_result_count = 0U;
     g_report_head = g_report_count = 0U;
+    #ifndef ABOX_MCU_GD32F105
     memset(&filter, 0, sizeof(filter));
     filter.FilterBank = TOP_WING_CAN_BUS == 1 ? 0U : 14U;
     filter.FilterMode = CAN_FILTERMODE_IDMASK;
@@ -299,6 +302,7 @@ void WingController_Init(void)
     (void)HAL_CAN_ConfigFilter(selected_can(), &filter);
     (void)HAL_CAN_Start(selected_can());
     (void)HAL_CAN_ActivateNotification(selected_can(), CAN_IT_RX_FIFO0_MSG_PENDING);
+    #endif
     APP_LOGI("WING", "CAN%u remote-session idle=silent tx=0x%08lX rx=0x%08lX",
              (unsigned)TOP_WING_CAN_BUS, (unsigned long)WING_CAN_TX_ID,
              (unsigned long)WING_CAN_RX_ID);

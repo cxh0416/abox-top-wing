@@ -41,6 +41,8 @@ typedef struct
     uint32_t reserved[3];
 } OTA_Info_t;
 
+uint8_t OTA_Info_Recover(void);
+uint8_t OTA_Info_PrepareExternalWrite(void);
 void OTA_Info_Load(OTA_Info_t* info);
 uint8_t OTA_Info_Save(const OTA_Info_t* info);
 uint8_t OTA_Info_Clear(void);

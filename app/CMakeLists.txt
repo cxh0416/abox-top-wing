@@ -30,13 +30,23 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 
 set(ABOX_PRODUCT_CONFIG_DIR "${CMAKE_SOURCE_DIR}/../platform_config")
 set(ABOX_PLATFORM_SCHEDULER "BAREMETAL")
+set(ABOX_BOARD_VERSION "v2" CACHE STRING "PCB version (v1 GD32, v2 STM32)")
+set_property(CACHE ABOX_BOARD_VERSION PROPERTY STRINGS v1 v2)
+if(NOT ABOX_BOARD_VERSION MATCHES "^v[12]$")
+    message(FATAL_ERROR "ABOX_BOARD_VERSION must be v1 or v2")
+endif()
+if(ABOX_BOARD_VERSION STREQUAL "v1")
+    set(TOP_WING_GD32 ON)
+else()
+    set(TOP_WING_GD32 OFF)
+endif()
 add_subdirectory("${CMAKE_SOURCE_DIR}/../platform" abox_platform_build)
 
 set(TOP_WING_CAN_BUS "2" CACHE STRING "Top flying wing CAN port (1 or 2)")
 if(NOT TOP_WING_CAN_BUS MATCHES "^[12]$")
     message(FATAL_ERROR "TOP_WING_CAN_BUS must be 1 or 2")
 endif()
-set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.6" CACHE STRING "Top flying wing App firmware version")
+set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.16-st" CACHE STRING "Top flying wing App firmware version")
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
@@ -48,7 +58,9 @@ set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
 )
 
 # Add STM32CubeMX generated sources
-add_subdirectory(cmake/stm32cubemx)
+if(NOT TOP_WING_GD32)
+    add_subdirectory(cmake/stm32cubemx)
+endif()
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
@@ -57,7 +69,6 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    Core/User/Src/abox_product_port.c
     Core/User/Src/app_log.c
     Core/User/Src/board_config.c
     Core/User/Src/mqtt_app.c
@@ -70,7 +81,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/User/Src/time_sync.c
     Core/User/Src/wing_enrollment.c
     Core/User/Src/wing_app_service.c
-    "${CMAKE_SOURCE_DIR}/../platform/targets/stm32f105_ec800_v1/enrollment_identity_stm32f105.c"
     Core/User/Src/mqtt_core.c
     Core/User/Src/ota_info.c
     Core/User/Src/ota_service.c
@@ -99,7 +109,6 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
-    stm32cubemx
     abox::ec800
     abox::app_service
     abox::mqtt_digest
@@ -117,9 +126,31 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
-abox_platform_attach(${CMAKE_PROJECT_NAME})
-abox_platform_attach_boot_v2_app(${CMAKE_PROJECT_NAME})
-abox_platform_attach_standard_clock(${CMAKE_PROJECT_NAME})
+if(TOP_WING_GD32)
+    if(NOT TOP_FLYING_WING_APP_FW_VERSION MATCHES "-gd$")
+        message(FATAL_ERROR "V1 GD32 App version must end in -gd")
+    endif()
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/User/gd32/main_gd32.c
+        Core/User/gd32/wing_gd_can.c Core/Src/syscalls.c Core/Src/sysmem.c)
+    abox_platform_attach_f105_app(${CMAKE_PROJECT_NAME} PRODUCT_CONFIG_DIR "${ABOX_PRODUCT_CONFIG_DIR}"
+        HARDWARE gd32f105_ec800_v1 CAN CAN_EVENTS)
+    # The product vector table adds its safety sampling SysTick to the public GD startup.
+    get_target_property(wing_sources ${CMAKE_PROJECT_NAME} SOURCES)
+    list(FILTER wing_sources EXCLUDE REGEX "startup_gd32f105[.]c$")
+    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY SOURCES "${wing_sources}")
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/User/gd32/startup_gd32_wing.c)
+    target_include_directories(${CMAKE_PROJECT_NAME} BEFORE PRIVATE "${CMAKE_SOURCE_DIR}/Core/User/gd32")
+else()
+    if(NOT TOP_FLYING_WING_APP_FW_VERSION MATCHES "-st$")
+        message(FATAL_ERROR "V2 STM32 App version must end in -st")
+    endif()
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/User/Src/abox_product_port.c
+        "${CMAKE_SOURCE_DIR}/../platform/targets/stm32f105_ec800_v1/enrollment_identity_stm32f105.c")
+    target_link_libraries(${CMAKE_PROJECT_NAME} stm32cubemx)
+    abox_platform_attach(${CMAKE_PROJECT_NAME})
+    abox_platform_attach_boot_v2_app(${CMAKE_PROJECT_NAME})
+    abox_platform_attach_standard_clock(${CMAKE_PROJECT_NAME})
+endif()
 
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_PROJECT_NAME}.bin

@@ -2,7 +2,7 @@
 param(
     [string]$BootPath = "",
     [string]$AppPath = "",
-    [string]$FirmwareVersion = "top-flying-wing-1.1.7",
+    [string]$FirmwareVersion = "top-flying-wing-1.1.16-st",
     [string]$BootVersion = "abox-boot-2.3.0"
 )
 
@@ -29,6 +29,16 @@ foreach ($path in @($BootPath, $AppPath)) {
 $appOffset = 0x8000
 $boot = [System.IO.File]::ReadAllBytes($BootPath)
 $app = [System.IO.File]::ReadAllBytes($AppPath)
+if ([Text.Encoding]::ASCII.GetString($app).Contains("TOP_FLYING_WING_MCU=GD32F105RCT6`0")) {
+    throw 'GD32 V1 App cannot be packaged with the frozen STM32 Boot; use a separately validated GD32 Boot candidate.'
+}
+$frozenBoot = Join-Path $root 'platform/targets/stm32f105_abox_boot/dist/ABox_Boot.bin'
+if ($BootVersion -ne 'abox-boot-2.3.0' -or
+    (Get-FileHash -LiteralPath $BootPath -Algorithm SHA256).Hash -ne
+    (Get-FileHash -LiteralPath $frozenBoot -Algorithm SHA256).Hash) {
+    throw 'STM32 V2 package requires the frozen STM32 Boot and matching version.'
+}
+if ($app.Length -gt 0x36000) { throw 'App overlaps configuration recovery page' }
 if ($boot.Length -gt $appOffset) {
     throw 'Boot image exceeds 0x8000-byte region'
 }
@@ -93,7 +103,7 @@ try {
         ota_downloader = 'app'
         can_session_mode = 'remote_only_idle_silent'
         idle_status_poll_enabled = $false
-        app_range = '0x08008000..0x0803E7FF'
+        app_range = '0x08008000..0x0803DFFF'
         boot_state_pages = @('0x0803E800', '0x0803F000')
         config_page = '0x0803F800'
         artifacts = @(

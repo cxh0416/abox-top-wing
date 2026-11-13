@@ -27,10 +27,12 @@ def main() -> None:
     for source in (app_cfg, boot_cfg):
         assert "BOOT_STATE_A_ADDR 0x0803E800U" in source
         assert "BOOT_STATE_B_ADDR 0x0803F000U" in source
-        assert "APP_END_ADDR (BOOT_STATE_A_ADDR - 1U)" in source
+    assert "APP_END_ADDR (BOOT_STATE_A_ADDR - 1U)" in boot_cfg
+    assert "CONFIG_RECOVERY_ADDR 0x0803E000U" in app_cfg
+    assert "APP_END_ADDR (CONFIG_RECOVERY_ADDR - 1U)" in app_cfg
     assert "OTA_INFO_ADDR 0x0803F800U" in app_cfg
     assert "DEVICE_CONFIG_ADDR 0x0803F800U" in boot_cfg
-    assert "ORIGIN = 0x08008000, LENGTH = 0x36800" in app_linker
+    assert "ORIGIN = 0x08008000, LENGTH = 0x36000" in app_linker
     assert "ORIGIN = 0x08000000, LENGTH = 0x7F00" in boot_linker
     assert "ORIGIN = 0x08007F00, LENGTH = 0x100" in boot_linker
     assert "0x2000BC40" in boot_linker
@@ -41,7 +43,9 @@ def main() -> None:
     assert "ABoxBootV2Boot_Task" in boot_core
     assert "App owns HTTPS/CA/direct+Range staging" in boot_core
     assert '.product_id="abox_stm32f105"' in descriptor
-    assert '.build_version="abox-boot-2.3.0"' in descriptor
+    assert ('.build_version="abox-boot-2.3.0"' in descriptor or
+            ('#define ABOX_BOOT_DESCRIPTOR_VERSION "abox-boot-2.3.0"' in descriptor and
+             '.build_version=ABOX_BOOT_DESCRIPTOR_VERSION' in descriptor))
     assert "ABoxBootV2App_Init" in app_core
     assert 'c.ota_origin="https://ota.zxwl.ntiov.com:20443"' in app_core
     assert 'c.revision_product="top_flying_wing"' in app_core

@@ -7,6 +7,7 @@
 #include "time_base.h"
 #include "abox_mqtt_v4.h"
 #include "abox_boot_v2.h"
+#include "abox_platform_port.h"
 
 #define BEGIN_COMMIT 0x34574247U
 #define COMPLETE_COMMIT 0x34574350U
@@ -51,6 +52,7 @@ static int valid(const MqttV4Record* r)
 
 int MQTT_V4_StoreFind(const char* device_id, const char* id, MqttV4Record* record, int* slot)
 {
+    if (!OTA_Info_Recover()) return -1;
     const MqttV4Record* entries = records();
     int found = 0;
     for (unsigned i = 0; i < MQTT_V4_STORE_SLOTS; ++i)
@@ -94,6 +96,7 @@ static uint32_t marker(void)
 
 int MQTT_V4_StoreInitialized(void)
 {
+    if (!OTA_Info_Recover()) return -1;
     uint32_t value = marker();
     return value == UFS_INITIALIZED ? 1 : value == UINT32_MAX ? 0 : -1;
 }
@@ -101,16 +104,17 @@ int MQTT_V4_StoreInitialized(void)
 int MQTT_V4_StoreMarkInitialized(void)
 {
     uint32_t value = UFS_INITIALIZED;
+    if (!OTA_Info_Recover()) return 0;
     if (marker() == value) return 1;
-    if (marker() != UINT32_MAX) return 0;
+    if (marker() != UINT32_MAX || !OTA_Info_PrepareExternalWrite()) return 0;
 #ifdef TOP_WING_HOST_TEST
     if (!MQTT_V4_TestProgram(offsetof(OTA_Info_t, reserved), &value, sizeof(value))) return 0;
 #else
-    if (HAL_FLASH_Unlock() != HAL_OK) return 0;
-    HAL_StatusTypeDef status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-        OTA_INFO_ADDR + offsetof(OTA_Info_t, reserved), value);
-    HAL_FLASH_Lock();
-    if (status != HAL_OK) return 0;
+    if (!ABox_PortFlashBegin()) return 0;
+    int status = ABox_PortFlashWrite(OTA_INFO_ADDR + offsetof(OTA_Info_t, reserved),
+                                     (const uint8_t *)&value, sizeof(value));
+    ABox_PortFlashEnd();
+    if (!status) return 0;
 #endif
     return marker() == value;
 }

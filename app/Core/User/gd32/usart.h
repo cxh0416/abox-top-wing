@@ -1,0 +1,3 @@
+#ifndef TOP_WING_GD32_USART_H
+#define TOP_WING_GD32_USART_H
+#endif

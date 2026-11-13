@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Release')] [string] $Configuration = 'Release',
-    [string] $FirmwareVersion = 'top-flying-wing-1.1.9'
+    [string] $FirmwareVersion = 'top-flying-wing-1.1.15-st'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,8 +18,7 @@ foreach ($required in @($toolchain, $bootLinker, $appLinker, $bootArtifact, $val
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing release input: $required" }
 }
 
-# Top Flying Wing retains App through 0x0803E7FF and has no extra recovery
-# page at 0x0803E000. Validate its frozen contract rather than another layout.
+# The final App page is reserved for configuration recovery.
 & python $validator | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'Frozen Flash layout validation failed' }
 

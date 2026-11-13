@@ -18,7 +18,7 @@ App 版本：`{{FIRMWARE_VERSION}}`。公共 Boot：`{{BOOT_VERSION}}`。
 1. 使用烧录软件加载 `TopFlyingWing_Full.bin`，起始地址设为 **`0x08000000`**。
 2. 仅擦除文件覆盖的 Flash 页，并启用写入后校验。
 3. 文件长度固定为 **260096 字节（254 KiB）**，覆盖 `0x08000000..0x0803F7FF`，不包含配置页。
-4. **保留 `0x0803F800..0x0803FFFF` 配置页，不执行整片擦除。**
+4. **保留 `0x0803F800..0x0803FFFF` 配置页，不执行整片擦除。**写入 Full 前先确认没有待恢复的配置写入事务：Full 覆盖配置恢复页。
 5. 整包已经包含匹配 State，无需另外叠加其他版本的 State。校验成功后再复位运行。
 
 独立通过调试器更新 App 时，须同时写入本包的 `TopFlyingWing_BootState.bin`，避免旧 State 的长度或 CRC 与新 App 不匹配。不要把 State 文件加载到 `0x08000000`。OTA 安装由设备管理启动状态，不需要上传 Full、Boot 或 State。
@@ -26,7 +26,8 @@ App 版本：`{{FIRMWARE_VERSION}}`。公共 Boot：`{{BOOT_VERSION}}`。
 ## 固定分区
 
 - Boot：`0x08000000..0x08007FFF`。
-- App：`0x08008000..0x0803E7FF`。
+- App：`0x08008000..0x0803DFFF`。
+- 配置恢复页：`0x0803E000..0x0803E7FF`，用于配置写入中断后的恢复。
 - State A：`0x0803E800..0x0803EFFF`，初始为匹配本次 App 的 `CONFIRMED` 记录。
 - State B：`0x0803F000..0x0803F7FF`，初始为擦除态 `0xFF`，供后续冗余写入使用。
 - 配置页：`0x0803F800..0x0803FFFF`，本包不覆盖。

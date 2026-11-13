@@ -72,6 +72,10 @@ void MQTT_V4_StoreTask(void)
         if (!initialized) { APP_LOGE("IDEM", "journal initialization failed"); return; }
     }
     if (!initialized) return;
+    /* A first-use marker cannot be written during a Boot trial. Defer the
+     * journal load instead of permanently failing its cache before confirm. */
+    if (!store.loaded && !store.loading && MQTT_V4_StoreInitialized() == 0 &&
+        !OtaService_ConfigWriteAllowed()) return;
     uint8_t was_failed = store.cache.failed;
     if (!store.loaded && !store.loading && ABoxUfsJournal_Status(&store.journal) == 0)
         (void)ABoxMqttIdemUfs_Load(&store, now);

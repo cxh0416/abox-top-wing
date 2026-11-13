@@ -52,6 +52,8 @@ int MQTT_V4_TestProgram(uint32_t offset, const void* data, uint32_t length)
     if (expire_during_write) utc=1800000005000ULL;
     return 1;
 }
+uint8_t OTA_Info_Recover(void) { return 1U; }
+uint8_t OTA_Info_PrepareExternalWrite(void) { return 1U; }
 void OTA_Info_Load(OTA_Info_t* info) { memcpy(info, flash_page.bytes, sizeof(*info)); }
 uint8_t OTA_Info_Save(const OTA_Info_t* info)
 {
@@ -103,6 +105,8 @@ static File files[2];
 static ABoxUfsRequest file_request;
 static uint64_t file_operation;
 static int leased, ota_busy, file_error, cut_write = -1;
+static uint8_t config_write_allowed = 1U;
+uint8_t OtaService_ConfigWriteAllowed(void) { return config_write_allowed; }
 static unsigned writes;
 static uint8_t workspace[MQTT_V4_IDEM_WORKSPACE_SIZE];
 void MQTT_V4_TestStoreBoot(const ABoxEc800UfsPort* port);
@@ -144,6 +148,7 @@ static void boot_storage(void)
 
 static void reset_all(void)
 {
+    config_write_allowed = 1U;
     memset(flash_page.bytes, 255, sizeof(flash_page.bytes));
     memset(published, 0, sizeof(published)); memset(receipts, 0, sizeof(receipts));
     utc = 1800000000000ULL; trusted = ready = 1U; ready_seq = 1U; publish_busy = 0U;
@@ -151,6 +156,17 @@ static void reset_all(void)
     strcpy(g_mqtt_app_device_id,"W1"); expire_during_write=0U; memset(files,0,sizeof(files)); file_operation=writes=0; leased=ota_busy=file_error=0; cut_write=-1;
     g_mqtt_app_last_hb_tick = g_mqtt_app_last_hb_ok_tick = 0U;
     reset_controller(); boot_storage();
+}
+static void test_first_use_waits_for_trial_confirmation(void)
+{
+    reset_all();
+    memset(flash_page.bytes, 0xff, sizeof(flash_page.bytes));
+    memset(files, 0, sizeof(files)); file_operation = 0U;
+    config_write_allowed = 0U; boot_storage();
+    assert(MQTT_V4_StoreInitialized() == 0 && file_operation == 0U);
+    assert(MQTT_V4_Store() && !MQTT_V4_Store()->failed);
+    config_write_allowed = 1U; pump();
+    assert(MQTT_V4_StoreInitialized() == 1 && !MQTT_V4_Store()->failed);
 }
 static int code(void)
 {
@@ -635,6 +651,7 @@ int main(int argc, char** argv)
         puts("]}");
         return 0;
     }
+    test_first_use_waits_for_trial_confirmation();
     wing_control_regression();
     test_expiry_and_strict_input(); test_replay_and_reboot(); test_uncertain_and_torn_records();
     test_stop_confirmation_and_long_ids(); test_completed_stops_do_not_fill_cache();

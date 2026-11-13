@@ -17,7 +17,11 @@ void AntiPinchBoard_Init(void)
     output_active = 0U;
     /* MX_GPIO_Init owns pin configuration. PA0 enables the board's PVIN
      * high-side switch; it does not supply 12 V directly from the MCU. */
+#ifdef ABOX_MCU_GD32F105
+    gpio_bit_reset(GPIOA, 1U << 0);
+#else
     HAL_GPIO_WritePin(ANTI_PINCH_OUTPUT_GPIO_Port, ANTI_PINCH_OUTPUT_Pin, GPIO_PIN_RESET);
+#endif
     AntiPinchAlarm_Init(&alarm);
     ready = 1U;
 }
@@ -34,8 +38,13 @@ void AntiPinchBoard_Tick(uint32_t now)
 {
     uint8_t pressed, was_pressed, alarm_active;
     if (!ready) return;
+#ifdef ABOX_MCU_GD32F105
+    /* Connector B8 maps to PA4 on PCB V1. */
+    pressed = gpio_input_bit_get(GPIOA, 1U << 4) != RESET;
+#else
     pressed = HAL_GPIO_ReadPin(ANTI_PINCH_CONTACT_GPIO_Port, ANTI_PINCH_CONTACT_Pin)
               == GPIO_PIN_SET;
+#endif
     was_pressed = alarm.stable_pressed;
     alarm_active = AntiPinchAlarm_Update(&alarm, now, pressed && scope_enabled);
     contact_pressed = alarm.stable_pressed;
@@ -45,8 +54,12 @@ void AntiPinchBoard_Tick(uint32_t now)
     if (alarm_active != output_active)
     {
         output_active = alarm_active;
+#ifdef ABOX_MCU_GD32F105
+        if (alarm_active) gpio_bit_set(GPIOA, 1U << 0); else gpio_bit_reset(GPIOA, 1U << 0);
+#else
         HAL_GPIO_WritePin(ANTI_PINCH_OUTPUT_GPIO_Port, ANTI_PINCH_OUTPUT_Pin,
                           alarm_active ? GPIO_PIN_SET : GPIO_PIN_RESET);
+#endif
     }
 }
 

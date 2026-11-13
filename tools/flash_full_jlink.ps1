@@ -14,8 +14,8 @@ if ([string]::IsNullOrWhiteSpace($FullPath)) {
 }
 $FullPath = (Resolve-Path -LiteralPath $FullPath).Path
 $full = [IO.File]::ReadAllBytes($FullPath)
-if ($full.Length -le 0x8000 -or $full.Length -gt 0x3E800) {
-    throw "Full image must contain Boot and fit below the Boot State pages: $FullPath"
+if ($full.Length -le 0x8000 -or $full.Length -gt 0x3E000) {
+    throw "Full image must contain Boot and fit below the configuration recovery page: $FullPath"
 }
 
 # Production Boot and App ranges end before the two 2 KiB Boot State pages.

@@ -9,6 +9,7 @@ void OtaService_Task(void);
 uint8_t OtaService_IsProvisioned(void);
 uint8_t OtaService_IsReady(void);
 uint8_t OtaService_IsBusy(void);
+uint8_t OtaService_ConfigWriteAllowed(void);
 uint8_t* OtaService_IdemWorkspace(void);
 int OtaService_AcquireIdemWorkspace(void);
 void OtaService_ReleaseIdemWorkspace(void);

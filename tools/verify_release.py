@@ -41,14 +41,14 @@ def verify(directory, expected_version=None):
     manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
     release = json.loads((directory / 'release.manifest.json').read_text(encoding='utf-8'))
     version = manifest['firmware_version']
-    require(re.fullmatch(r'top-flying-wing-\d+\.\d+\.\d+', version),
-            'A formal release requires a product version without a development suffix')
+    require(re.fullmatch(r'top-flying-wing-\d+\.\d+\.\d+(?:-st)?', version),
+            'A formal STM32 release requires a product version with an optional -st suffix')
     if expected_version is not None:
         require(version == expected_version, 'Unexpected release version')
     require(manifest['product'] == release['product'] == 'top_flying_wing', 'Product mismatch')
     require(release['version'] == version and manifest['boot_version'] == 'abox-boot-2.3.0',
             'Release/Boot version mismatch')
-    require(manifest['app_range'] == '0x08008000..0x0803E7FF' and
+    require(manifest['app_range'] == '0x08008000..0x0803DFFF' and
             manifest['boot_state_pages'] == ['0x0803E800', '0x0803F000'] and
             manifest['config_page'] == '0x0803F800', 'Flash partition contract changed')
     require(manifest['boot_state_initialization'] == {
@@ -88,7 +88,7 @@ def verify(directory, expected_version=None):
     module.verify(directory / 'ABox_Boot.bin')
     require(boot == (frozen / 'dist/ABox_Boot.bin').read_bytes(), 'Frozen Boot bytes changed')
 
-    require(8 <= len(app) <= 0x36800, 'App exceeds its partition')
+    require(8 <= len(app) <= 0x36000, 'App exceeds its partition')
     sp, reset = struct.unpack_from('<II', app)
     require(0x20000000 <= sp <= 0x20010000 and sp % 8 == 0 and reset & 1 and
             0x08008000 <= (reset & ~1) < 0x08008000 + len(app), 'Invalid App vectors')

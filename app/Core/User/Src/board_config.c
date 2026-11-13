@@ -8,6 +8,7 @@
 static BoardConfigStore_t g_board_cfg;
 static BoardConfigStore_t g_board_cfg_work;
 static uint8_t g_have_saved_config;
+static uint8_t g_storage_ready;
 
 static void copy_text(char* dst, uint16_t size, const char* src)
 {
@@ -60,7 +61,15 @@ static uint8_t valid(const BoardConfigStore_t* cfg)
 
 void BoardConfig_Load(void)
 {
-    OTA_Info_LoadBoardConfig(&g_board_cfg_work);
+    if (!OTA_Info_LoadBoardConfig(&g_board_cfg_work))
+    {
+        g_storage_ready = 0U;
+        g_have_saved_config = 0U;
+        BoardConfig_ResetDefault(&g_board_cfg);
+        APP_LOGE("CFG", "configuration recovery failed; enrollment disabled");
+        return;
+    }
+    g_storage_ready = 1U;
     g_have_saved_config = valid(&g_board_cfg_work);
     if (valid(&g_board_cfg_work))
     {
@@ -74,6 +83,7 @@ void BoardConfig_Load(void)
     }
 }
 
+uint8_t BoardConfig_StorageReady(void) { return g_storage_ready; }
 const BoardConfigStore_t* BoardConfig_Get(void) { return &g_board_cfg; }
 uint8_t BoardConfig_HasMqttCredentials(void)
 { return g_have_saved_config && (g_board_cfg.flags & BOARD_CONFIG_FLAG_MQTT_TLS) &&

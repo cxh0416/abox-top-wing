@@ -22,6 +22,8 @@ static uint32_t at_tick(void* user) { (void)user;return tick; }
 static int at_write(void* user,const uint8_t* data,uint16_t length,uint32_t timeout)
 { (void)user;(void)data;(void)length;(void)timeout;assert(!"HTTP must not start in this fixture");return 0; }
 void AppLog_Printf(AppLogLevel_t l,const char* t,const char* f,...) { (void)l;(void)t;(void)f; }
+uint8_t OTA_Info_Recover(void) { return 1U; }
+uint8_t BoardConfig_StorageReady(void) { return 1U; }
 uint8_t BoardConfig_HasMqttCredentials(void) { return saved; }
 const BoardConfigStore_t* BoardConfig_Get(void) { return &config; }
 uint8_t BoardConfig_SetMqtt(const char* id,const char* host,uint16_t port,const char* user,const char* password,uint8_t tls)

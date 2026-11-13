@@ -57,7 +57,7 @@ MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 64K
 /* Boot V2 reserves 0x0803E800..0x0803F7FF for redundant state records. */
-FLASH (rx)      : ORIGIN = 0x08008000, LENGTH = 0x36800
+FLASH (rx)      : ORIGIN = 0x08008000, LENGTH = 0x36000
 }
 
 /* Highest address of the user mode stack */

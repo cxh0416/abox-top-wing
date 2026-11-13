@@ -256,7 +256,7 @@ static void handle_ota(const char* request_id, cJSON* params)
     if (!cJSON_IsString(url) || !url->valuestring || strlen(url->valuestring) >= sizeof(request.url) ||
         strncmp(url->valuestring, "https://", 8U) != 0 || !cJSON_IsString(version) || !version->valuestring ||
         strlen(version->valuestring) >= sizeof(request.version) || !cJSON_IsNumber(size) || size->valuedouble <= 0.0 ||
-        size->valuedouble > 0x36800U || !parse_crc(crc, &parsed_crc))
+        size->valuedouble > APP_MAX_SIZE || !parse_crc(crc, &parsed_crc))
     { build_response(RESP_INTERNAL_OTA, request_id, 4001U, WING_ACTION_NONE, 0U, 0); return; }
     if (MQTT_App_IsMqttConfigTrialActive()) { build_response(RESP_INTERNAL_OTA, request_id, 4003U, WING_ACTION_NONE, 0U, 0); return; }
     if (!OtaService_IsReady()) { build_response(RESP_INTERNAL_OTA, request_id, 500U, WING_ACTION_NONE, 0U, 0); return; }

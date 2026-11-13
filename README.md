@@ -6,8 +6,9 @@
 
 ## 结构
 
-- `app/`：STM32F105 App，负责 EC800、MQTT、CAN 控制器状态机和 Boot V2 OTA 下载。
+- `app/`：V1 GD32F105 / V2 STM32F105 App，负责 EC800、MQTT、CAN 控制器状态机和 Boot V2 OTA 下载。
 - `platform/targets/stm32f105_abox_boot/`：公共平台完整 Boot 目标，只负责安装、试运行确认与回滚，不联网下载。
+- `platform/targets/gd32f105_abox_boot/`：GD32 V1 独立 Boot；不得与 STM32 Boot 混用。
 - `docs/vendor/`：厂家 CAN/控制器资料，仅作为设备端帧依据。
 - `docs/protocols/`：按公共基础、产品业务 Profile 和内部运维接口拆分的协议文档。
 - `dist/`：仅保存最新正式版的 App、Boot、Boot State、含 State 的 Full、校验清单和烧录说明；每次正式打包成功后整体替换，不保存历史版本或诊断包。

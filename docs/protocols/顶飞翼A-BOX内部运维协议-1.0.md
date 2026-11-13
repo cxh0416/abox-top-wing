@@ -292,8 +292,8 @@ A-BOX 在没有待发响应、心跳、状态或 OTA 工作时，从 RAM 日志�
 | 参数 | 类型 | 约束 |
 |---|---|---|
 | `url` | String | 必须精确匹配 `https://ota.zxwl.ntiov.com:20443/fw-revisions/top_flying_wing/{version}/top_flying_wing_app.bin` |
-| `version` | String | 必须以 `top-flying-wing-` 开头，长度不超过固件字段上限 |
-| `size` | Integer | 大于 0 且不超过 `0x36800` 字节 |
+| `version` | String | `top-flying-wing-{主版本}.{次版本}.{修订号}`，GD32 目标须以 `-gd` 结尾，STM32 目标可使用 `-st` 或历史无后缀版本；长度不超过固件字段上限 |
+| `size` | Integer | 大于 0 且不超过 `0x36000` 字节 |
 | `crc32` | String | 8 位十六进制字符串，不带 `0x` |
 
 当前 OTA 只安装 App revision。公共平台 `ABox_Boot.bin` 和产品 `TopFlyingWing_Full.bin` 是工厂烧录或维修产物，不通过本 Topic 下发。

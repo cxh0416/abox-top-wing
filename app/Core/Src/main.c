@@ -98,6 +98,7 @@ int fputc(int ch, FILE* f)
 }
 
 const char g_top_flying_wing_fw_version_marker[] = TOP_FLYING_WING_APP_FW_VERSION_MARKER;
+const char g_top_wing_mcu_marker[] = "TOP_FLYING_WING_MCU=STM32F105RCT6";
 
 const char* TopFlyingWing_AppFwVersion(void)
 {
@@ -188,6 +189,7 @@ int main(void)
     APP_LOGI("APP", "boot");
     APP_LOGI("APP", "fw=%s", TopFlyingWing_AppFwVersion());
     APP_LOGI("APP", "%s", g_top_flying_wing_fw_version_marker);
+    APP_LOGI("APP", "%s", g_top_wing_mcu_marker);
 
     EC_Power_Init();
     EC_Power_StartRestartSequence();

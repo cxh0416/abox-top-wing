@@ -20,7 +20,8 @@ typedef enum
     SESSION_WAIT_START_STATUS,
     SESSION_RUNNING,
     SESSION_WAIT_STOP_ACK,
-    SESSION_WAIT_STOP_STATUS
+    SESSION_WAIT_STOP_STATUS,
+    SESSION_FAULT
 } SessionState;
 
 typedef enum { QUERY_NONE = 0, QUERY_RD, QUERY_RL } ExpectedQuery;
@@ -197,6 +198,16 @@ static void fail_direction(uint16_t code, WingControlOwner owner)
     finish_idle(owner);
 }
 
+static void stop_failed(uint16_t code)
+{
+    push_result(g_session.stop_request_id, WING_ACTION_STOP, code);
+    clear_session();
+    g_session.state = SESSION_FAULT;
+    WingState_SetSession(&g_state, WING_CAN_SESSION_FAULT, WING_PHASE_STOPPING,
+                         WING_CONTROL_OWNER_NONE);
+    push_report(WING_REPORT_STATE_CHANGED);
+}
+
 static uint8_t begin_stop(StopCause cause, const char* stop_request_id, uint32_t now)
 {
     const char* tx_id = stop_request_id;
@@ -212,10 +223,7 @@ static uint8_t begin_stop(StopCause cause, const char* stop_request_id, uint32_t
     if (!tx_id || !tx_id[0]) tx_id = g_session.direction_request_id;
     if (!send_action(WING_ACTION_STOP, tx_id))
     {
-        if (stop_request_id && stop_request_id[0]) push_result(stop_request_id, WING_ACTION_STOP, 5001U);
-        WingState_SetSession(&g_state, WING_CAN_SESSION_FAULT, WING_PHASE_STOPPING,
-                             cause == STOP_CONFLICT ? WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_REMOTE);
-        finish_idle(cause == STOP_CONFLICT ? WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_NONE);
+        stop_failed(5001U);
         return 0U;
     }
     g_session.stop_command_sent = 1U;
@@ -308,7 +316,7 @@ void WingController_Init(void)
              (unsigned long)WING_CAN_RX_ID);
 }
 
-uint16_t WingController_Request(WingAction action, const char* request_id)
+static uint16_t controller_request(WingAction action, const char* request_id)
 {
     uint32_t now = HAL_GetTick();
     uint16_t code;
@@ -341,6 +349,16 @@ uint16_t WingController_Request(WingAction action, const char* request_id)
     return 0U;
 }
 
+uint16_t WingController_Request(WingAction action, const char* request_id)
+{
+    uint32_t irq = __get_PRIMASK();
+    uint16_t code;
+    __disable_irq();
+    code = controller_request(action, request_id);
+    __set_PRIMASK(irq);
+    return code;
+}
+
 void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
 {
     CAN_RxHeaderTypeDef header;
@@ -368,8 +386,7 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
         {
             if (!msg.accepted)
             {
-                if (g_session.stop_request_id[0]) push_result(g_session.stop_request_id, WING_ACTION_STOP, 5004U);
-                finish_idle(g_session.stop_cause == STOP_CONFLICT ? WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_NONE);
+                stop_failed(5004U);
                 return;
             }
             g_session.state = SESSION_WAIT_STOP_STATUS;
@@ -466,12 +483,13 @@ void WingController_OnCanRx(CAN_HandleTypeDef* hcan)
 
     if (g_session.state == SESSION_WAIT_STOP_STATUS)
     {
-        if (!msg.moving || msg.fault_code) finish_stop();
+        if (msg.fault_code) { stop_failed(5005U); return; }
+        if (!msg.moving) finish_stop();
         return;
     }
 }
 
-void WingController_Task(uint32_t now)
+static void controller_task(uint32_t now)
 {
     WingState_Tick(&g_state, now);
 
@@ -501,8 +519,8 @@ void WingController_Task(uint32_t now)
     if ((g_session.state == SESSION_WAIT_START_ACK || g_session.state == SESSION_WAIT_START_STATUS) &&
         (now - g_session.phase_tick) >= WING_COMMAND_TIMEOUT_MS)
     {
-        if (g_session.state == SESSION_WAIT_START_ACK) fail_direction(5003U, WING_CONTROL_OWNER_NONE);
-        else (void)begin_stop(STOP_SAFETY, "", now);
+        /* A lost start ACK cannot prove that the controller did not move. */
+        (void)begin_stop(STOP_SAFETY, "", now);
         return;
     }
 
@@ -527,11 +545,16 @@ void WingController_Task(uint32_t now)
     if ((g_session.state == SESSION_WAIT_STOP_ACK || g_session.state == SESSION_WAIT_STOP_STATUS) &&
         (now - g_session.stop_tick) >= WING_COMMAND_TIMEOUT_MS)
     {
-        if (g_session.stop_request_id[0])
-            push_result(g_session.stop_request_id, WING_ACTION_STOP, 5003U);
-        finish_idle(g_session.stop_cause == STOP_CONFLICT ?
-                    WING_CONTROL_OWNER_LOCAL_SUSPECTED : WING_CONTROL_OWNER_NONE);
+        stop_failed(5003U);
     }
+}
+
+void WingController_Task(uint32_t now)
+{
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    controller_task(now);
+    __set_PRIMASK(irq);
 }
 
 const WingSnapshot* WingController_GetSnapshot(void) { return &g_state.snapshot; }

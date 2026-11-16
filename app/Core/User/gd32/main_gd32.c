@@ -1,7 +1,8 @@
 #include "main.h"
 #include "can.h"
 #include "abox_board.h"
-#include "abox_modem_port.h"
+#include "abox_uart.h"
+#include "wing_gd_board_config.h"
 #include "app_log.h"
 #include "app_version.h"
 #include "board_config.h"
@@ -41,9 +42,10 @@ const char *TopFlyingWing_AppFwVersion(void) { return TOP_FLYING_WING_APP_FW_VER
 int fputc(int ch, FILE *f) { (void)f; return ch; }
 static uint32_t tick(void *context) { (void)context; return HAL_GetTick(); }
 static int write_at(void *context, const uint8_t *data, uint16_t length, uint32_t timeout)
-{ (void)context; return ABoxModemPort_Write(data, length, timeout); }
-static void modem_rx(uint16_t position) { (void)ABoxEc800Rx_OnDmaEvent(&rx, position); }
-static void modem_error(void) { ABoxEc800Rx_RequestRestart(&rx); }
+{ (void)context; return ABoxUart_SendBlocking(ABOX_BOARD_UART_MODEM, data, length, timeout); }
+static void modem_rx(void *context, const uint8_t *data, uint16_t position)
+{ (void)context; (void)data; (void)ABoxEc800Rx_OnDmaEvent(&rx, position); }
+static void modem_error(void *context) { (void)context; ABoxEc800Rx_RequestRestart(&rx); }
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *h)
 {
 #ifdef TOP_WING_ZHONGTIAN
@@ -63,9 +65,14 @@ void Error_Handler(void) { __disable_irq(); for (;;) {} }
 
 int main(void)
 {
-    static const ABoxModemPortEvents modem_events = {modem_rx, modem_error};
+    static const ABoxUartEvents modem_events = {.rx=modem_rx, .error=modem_error};
+    static const ABoxBoardUartConfig uarts[] = {
+        {ABOX_BOARD_UART_MODEM, {115200U, 8U, 1U, ABOX_UART_PARITY_NONE, ABOX_UART_FLOW_NONE, .mode=ABOX_UART_ASYNC}}
+    };
+    static const ABoxMcuClockConfig clock = TOP_WING_GD_CLOCK_CONFIG;
+    static const ABoxBoardConfig board = {APP_START_ADDR, uarts, sizeof(uarts) / sizeof(uarts[0]), &clock};
     const ABoxEc800AtPort at_port = {0, tick, write_at, 0};
-    if (!ABoxBoard_Init(APP_START_ADDR)) Error_Handler();
+    if (!ABoxBoard_Init(&board)) Error_Handler();
     AppLog_Init(); TimeBase_Init();
     APP_LOGI("APP", "%s", g_top_flying_wing_fw_version_marker);
     APP_LOGI("APP", "%s", g_top_wing_mcu_marker);
@@ -74,7 +81,7 @@ int main(void)
 #endif
     EC_Power_Init(); EC_Power_StartRestartSequence();
     int communication_ok = ABoxEc800Rx_Init(&rx, dma, sizeof(dma), ring, sizeof(ring));
-    ABoxModemPort_SetEvents(&modem_events);
+    communication_ok = ABoxUart_SetEvents(ABOX_BOARD_UART_MODEM, &modem_events) && communication_ok;
     BoardConfig_Load(); AppLog_SetLevel((AppLogLevel_t)BoardConfig_Get()->diag_log_level);
     /* Bind both CAN IRQ owners only after board and safety state are ready. */
     __disable_irq();

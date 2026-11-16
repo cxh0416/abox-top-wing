@@ -46,7 +46,7 @@ set(TOP_WING_CAN_BUS "2" CACHE STRING "Top flying wing CAN port (1 or 2)")
 if(NOT TOP_WING_CAN_BUS MATCHES "^[12]$")
     message(FATAL_ERROR "TOP_WING_CAN_BUS must be 1 or 2")
 endif()
-set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.16-st" CACHE STRING "Top flying wing App firmware version")
+set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.18-st" CACHE STRING "Top flying wing App firmware version")
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
@@ -127,6 +127,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 )
 
 if(TOP_WING_GD32)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ABOX_UART_ENABLED_MASK=0x01U)
     if(NOT TOP_FLYING_WING_APP_FW_VERSION MATCHES "-gd$")
         message(FATAL_ERROR "V1 GD32 App version must end in -gd")
     endif()

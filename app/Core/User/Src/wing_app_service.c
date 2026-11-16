@@ -9,7 +9,8 @@
 #include "ota_service.h"
 #include "usart.h"
 #ifdef ABOX_MCU_GD32F105
-#include "abox_modem_port.h"
+#include "abox_board.h"
+#include "abox_uart.h"
 #endif
 #include "wing_enrollment.h"
 
@@ -22,9 +23,10 @@ static int restart_rx(void *context)
 {
     (void)context;
 #ifdef ABOX_MCU_GD32F105
-    if (!ABoxModemPort_AbortRx()) return 0;
+    if (!ABoxUart_AbortRx(ABOX_BOARD_UART_MODEM)) return 0;
     ABoxEc800Rx_AfterRestart(service.rx);
-    return ABoxModemPort_StartRx(service.rx->dma_buffer, service.rx->dma_size);
+    return ABoxUart_StartRx(ABOX_BOARD_UART_MODEM, ABOX_UART_RX_CIRCULAR_DMA,
+                            service.rx->dma_buffer, service.rx->dma_size);
 #else
     if (HAL_UART_AbortReceive(&huart1) != HAL_OK) return 0;
     ABoxEc800Rx_AfterRestart(service.rx);

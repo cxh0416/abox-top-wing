@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $ServiceRoot,
-    [string] $Compiler = 'D:/MinGW/bin/gcc.exe'
+    [string] $Compiler = 'gcc'
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path

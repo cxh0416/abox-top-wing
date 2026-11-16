@@ -1,6 +1,6 @@
 # A-BOX 顶飞翼固件
 
-产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，当前构建基线为 `top-flying-wing-1.1.6`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。
+产品标识固定为 `top_flying_wing`，本分支默认 App 版本为 `top-flying-wing-1.1.18-st`；V1 对应 `top-flying-wing-1.1.18-gd`。两种硬件分别使用各自的公共冻结 Boot；已有 `dist/` 的实际版本以其清单为准。
 
 公共组件、完整 Boot 边界和其他产品迁移状态见 `platform/README.md`、`platform/docs/PLATFORM_CONTRACT.md`、`platform/docs/PRODUCT_MATRIX.md`。
 
@@ -11,7 +11,7 @@
 - `platform/targets/gd32f105_abox_boot/`：GD32 V1 独立 Boot；不得与 STM32 Boot 混用。
 - `docs/vendor/`：厂家 CAN/控制器资料，仅作为设备端帧依据。
 - `docs/protocols/`：按公共基础、产品业务 Profile 和内部运维接口拆分的协议文档。
-- `dist/`：仅保存最新正式版的 App、Boot、Full 和校验清单；每次正式打包成功后整体替换，不保存历史版本或诊断包。
+- `dist/`：仅保存最新正式版的 V1/V2 配对包；每次正式打包成功后整体替换，不保存历史版本或诊断包。
 
 ## MQTT 接口边界
 
@@ -44,15 +44,15 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 ## 构建与验证
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build_release.ps1
 powershell -ExecutionPolicy Bypass -File .\tools\test_host.ps1
-powershell -ExecutionPolicy Bypass -File .\tools\test_v4.ps1 -ServiceRoot F:\work\device-ota-service
-python .\tools\test_boot_v2_contract.py
+python .\tools\build_paired_release.py --version top-flying-wing-1.1.18-st --candidate build/candidate-pair
+powershell -ExecutionPolicy Bypass -File .\tools\build_release.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\test_v4.ps1 -ServiceRoot D:\work\device-ota-service
 ```
 
-上述脚本默认构建 `top-flying-wing-1.1.6`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 生成维修用 Full 包。打包先生成完整临时制品，成功后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
+候选目录必须是 `dist/` 之外的新目录，候选不能作为正式发布或 OTA 版本。正式打包要求产品和平台工作区干净且子模块与提交一致，分别构建 V1/GD32 和 V2/STM32 App，检查各自的冻结 Boot、版本及 MCU 标记，全部通过后将 `dist/` 整体替换为 `v1/` 与 `v2/` 配对包。发布前应确认版本未在 OTA 仓库使用。
 
-App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。Full 只拼接到 App 实际末尾，不包含配置页和 Boot State。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
+每种硬件的 Full 含 Boot、App 和匹配的 Boot State A/B，覆盖到 `0x0803F7FF`，不包含配置页 `0x0803F800`。线刷时参考对应 `dist/v1/README_FLASH.md` 或 `dist/v2/README_FLASH.md`，仅擦写文件覆盖的页；Full 会覆盖配置恢复页 `0x0803E000`，须先确认没有待恢复的配置事务。旧单版 `package_release.ps1` 已停用。
 
 `test_v4.ps1` 使用平台统一预检，检查公共/产品回归以及实际固件报文、入网合同与服务端源码的兼容性。无保留要求的测试板必须使用公共整片擦除入口，从全空 MCU 配置开始入网验收；操作及存储边界见[平台内部接入流程](platform/docs/internal/new_product_onboarding.md#v4-统一预检与空板基线)。保留配置的升级、重启恢复另行验证。
 

@@ -14,6 +14,10 @@ static uint8_t g_tx[512][8];
 static uint16_t g_tx_count;
 static uint8_t g_rx[8];
 static uint8_t g_have_rx;
+static uint32_t g_primask, g_last_tx_primask;
+uint32_t WingTest_GetPrimask(void) { return g_primask; }
+void WingTest_DisableIrq(void) { g_primask = 1U; }
+void WingTest_SetPrimask(uint32_t value) { g_primask = value; }
 
 uint32_t HAL_GetTick(void) { return g_tick; }
 void AppLog_Printf(AppLogLevel_t level, const char* tag, const char* fmt, ...)
@@ -25,6 +29,7 @@ int HAL_CAN_AddTxMessage(CAN_HandleTypeDef* hcan, CAN_TxHeaderTypeDef* header,
     (void)hcan;
     assert(header->ExtId == WING_CAN_TX_ID && header->IDE == CAN_ID_EXT && header->DLC == 8U);
     assert(g_tx_count < 512U);
+    g_last_tx_primask = g_primask;
     memcpy(g_tx[g_tx_count++], data, 8U);
     if (mailbox) *mailbox = 0U;
     return HAL_OK;
@@ -54,6 +59,7 @@ static void reset_controller(void)
     g_tick = 0U;
     g_tx_count = 0U;
     g_have_rx = 0U;
+    g_primask = g_last_tx_primask = 0U;
     WingController_Init();
 }
 
@@ -289,6 +295,72 @@ static void test_direction_change_fault_and_max_runtime(void)
     assert(WingController_GetSnapshot()->safety_reason == WING_SAFETY_MAX_RUNTIME);
 }
 
+static void test_stop_failure_blocks_reversal_until_retry_confirmed(void)
+{
+    WingControlResult result;
+    uint8_t rejected_stop[8] = {'S', 'T', 0U, 0U, 0U, 0U, 0U, 1U};
+
+    for (unsigned failure = 0U; failure < 3U; ++failure)
+    {
+        reset_controller();
+        start_running(WING_ACTION_ASCEND, "up", 50U);
+        assert(WingController_Request(WING_ACTION_STOP, "stop") == 0U);
+        if (failure == 0U) receive(rejected_stop, 256U);
+        else if (failure == 1U) {
+            ack(WING_ACTION_STOP, 256U);
+            status_with_fault(50U, 1U, 1U, 257U);
+        } else {
+            g_tick = 255U + WING_COMMAND_TIMEOUT_MS;
+            WingController_Task(g_tick);
+        }
+        result = take_result();
+        assert(result.action == WING_ACTION_STOP && !result.stop_confirmed);
+        assert(result.code == (failure == 0U ? 5004U : failure == 1U ? 5005U : 5003U));
+        assert(WingController_GetSnapshot()->can_session == WING_CAN_SESSION_FAULT);
+        assert(WingController_Request(WING_ACTION_DESCEND, "down-before-stop") == 4003U);
+        assert(count_command('D', 'N') == 0U);
+        assert(WingController_Request(WING_ACTION_STOP, "retry-stop") == 0U);
+        ack(WING_ACTION_STOP, g_tick + 1U);
+        status(50U, 0U, g_tick + 1U);
+        result = take_result();
+        assert(result.code == 200U && result.stop_confirmed);
+        assert(WingController_Request(WING_ACTION_DESCEND, "down-after-stop") == 0U);
+    }
+}
+
+static void test_lost_start_ack_requires_stop(void)
+{
+    WingControlResult result;
+    reset_controller();
+    assert(WingController_Request(WING_ACTION_ASCEND, "unanswered-up") == 0U);
+    status(50U, 0U, 1U);
+    WingController_Task(251U);
+    status(50U, 0U, 252U);
+    limits(100U, 10U, 253U);
+    assert(count_command('U', 'P') == 1U);
+    g_tick = 253U + WING_COMMAND_TIMEOUT_MS;
+    WingController_Task(g_tick);
+    result = take_result();
+    assert(result.action == WING_ACTION_ASCEND && result.code == 5003U);
+    assert(count_command('S', 'T') == 1U);
+    assert(WingController_Request(WING_ACTION_DESCEND, "early-down") == 4003U);
+    ack(WING_ACTION_STOP, g_tick + 1U);
+    status(50U, 0U, g_tick + 1U);
+    assert(WingController_Request(WING_ACTION_DESCEND, "safe-down") == 0U);
+}
+
+static void test_main_state_transitions_mask_can_irq_and_restore_state(void)
+{
+    reset_controller();
+    assert(WingController_Request(WING_ACTION_ASCEND, "up") == 0U);
+    assert(g_last_tx_primask == 1U && g_primask == 0U);
+    status(50U, 0U, 1U);
+    g_primask = 1U;
+    WingController_Task(251U);
+    assert(g_last_tx_primask == 1U && g_primask == 1U);
+    g_primask = 0U;
+}
+
 int main(void)
 {
     test_idle_silent_and_correlation();
@@ -299,5 +371,8 @@ int main(void)
     test_conflict_and_unexpected_stop();
     test_stop_preemption_and_safety();
     test_direction_change_fault_and_max_runtime();
+    test_stop_failure_blocks_reversal_until_retry_confirmed();
+    test_lost_start_ack_requires_stop();
+    test_main_state_transitions_mask_can_irq_and_restore_state();
     return 0;
 }

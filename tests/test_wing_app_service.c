@@ -1,11 +1,18 @@
 #include "wing_app_service.h"
+#ifdef ABOX_MCU_GD32F105
+#include "abox_board.h"
+#include "abox_uart.h"
+#else
 #include "usart.h"
+#endif
 #include "app_log.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
+#ifndef ABOX_MCU_GD32F105
 UART_HandleTypeDef huart1;
+#endif
 static uint32_t now;
 static int power_done=1, stop_error, start_error, ota_busy, store_busy, lease;
 static unsigned stops, starts, restarts, reset_events, provisions, ota_calls, downloads;
@@ -16,9 +23,16 @@ uint32_t HAL_GetTick(void) { return now; }
 void EC_Power_Task(void) { }
 int EC_Power_IsOnDone(void) { return power_done; }
 void EC_Power_StartRestartSequence(void) { ++restarts; power_done=0; }
+#ifdef ABOX_MCU_GD32F105
+int ABoxUart_AbortRx(ABoxUartId id)
+{ assert(id == ABOX_BOARD_UART_MODEM); ++stops; return !stop_error; }
+int ABoxUart_StartRx(ABoxUartId id, ABoxUartRxMode mode, uint8_t *b, uint16_t n)
+{ assert(id == ABOX_BOARD_UART_MODEM && mode == ABOX_UART_RX_CIRCULAR_DMA && b && n == 1088); ++starts; return !start_error; }
+#else
 int HAL_UART_AbortReceive(UART_HandleTypeDef *u) { (void)u; ++stops; return stop_error; }
 int HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *u, uint8_t *b, uint16_t n)
 { (void)u; assert(b && n==1088); ++starts; return start_error; }
+#endif
 void AppLog_Printf(AppLogLevel_t l,const char *t,const char *f,...)
 { (void)l; (void)t; (void)f; }
 uint8_t OtaService_BeginProvisioning(void) { ++provisions; return 1; }

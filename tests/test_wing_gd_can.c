@@ -4,7 +4,7 @@
 #include "wing_gd_can_test_port.h"
 #include "abox_can_events.h"
 
-static ABoxCanEventCallbacks cb[2];
+static const ABoxCanEventCallbacks *cb[2];
 static ABoxCanEvents *bound[2];
 static int ready[2], fail_bus = -1, fail_bind = -1, stopped[2];
 static uint32_t rates[2], irq_state;
@@ -15,12 +15,15 @@ static unsigned received[2];
 uint32_t __get_PRIMASK(void) { return irq_state; }
 void __disable_irq(void) { irq_state = 1U; }
 void __set_PRIMASK(uint32_t state) { irq_state = state; }
-int ABoxCanPort_InitWithOptions(unsigned bus, uint32_t rate, ABoxCanMode mode, const ABoxCanOptions *opts)
-{ assert(bus < 2 && mode == ABOX_CAN_NORMAL); if ((int)bus == fail_bus) return 0; ready[bus]=1; rates[bus]=rate; options[bus]=*opts; return 1; }
+int ABoxCanPort_Init(unsigned bus, const ABoxCanConfig *config)
+{ assert(bus < 2 && config && config->mode == ABOX_CAN_NORMAL);
+  assert(config->segment1 == 15U && config->segment2 == 2U && config->sync_jump_width == 1U);
+  assert(!config->filter.enabled); if ((int)bus == fail_bus) return 0;
+  ready[bus]=1; rates[bus]=config->bitrate; options[bus]=config->options; return 1; }
 int ABoxCanPort_Stop(unsigned bus) { assert(bus < 2); ready[bus]=0; ++stopped[bus]; return 1; }
 int ABoxCanPort_IsReady(unsigned bus) { return bus < 2 && ready[bus]; }
 int ABoxCanPort_BindEvents(unsigned bus, ABoxCanEvents *events, const ABoxCanEventCallbacks *callbacks)
-{ if ((int)bus == fail_bind) return 0; assert(callbacks->receive && callbacks->complete); cb[bus]=*callbacks; bound[bus]=events; return 1; }
+{ if ((int)bus == fail_bind) return 0; assert(callbacks->receive && callbacks->complete); cb[bus]=callbacks; bound[bus]=events; return 1; }
 int ABoxCanPort_EnableEventIrq(unsigned bus, ABoxCanEvents *events) { return bound[bus] == events; }
 int ABoxCanEvents_Send(ABoxCanEvents *events, const ABoxCanFrame *frame, uint8_t *mailbox)
 { assert(events == bound[1] && irq_state); sent=*frame; *mailbox=2U; return 1; }
@@ -46,7 +49,8 @@ int main(void)
     assert(options[1].auto_retransmit && !options[1].auto_bus_off_recovery && options[1].rx_fifo_overwrite);
     assert(HAL_CAN_GetState(&hcan1) == HAL_CAN_STATE_LISTENING);
     ABoxCanFrame frame = {.id=0x18ec0057U,.length=2U,.extended=1U,.data={0x11,0x22}};
-    cb[0].receive(cb[0].context, &frame); cb[1].receive(cb[1].context, &frame);
+    assert(cb[0] != cb[1]); /* Callback tables must outlive the initialization stack. */
+    cb[0]->receive(cb[0]->context, &frame); cb[1]->receive(cb[1]->context, &frame);
     assert(received[0] == 1 && received[1] == 1);
     CAN_TxHeaderTypeDef header = {.ExtId=0x1234567U,.IDE=CAN_ID_EXT,.RTR=CAN_RTR_DATA,.DLC=2U};
     uint32_t mailbox=0; uint8_t data[2]={1,2};

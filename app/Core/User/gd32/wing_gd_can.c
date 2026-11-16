@@ -7,7 +7,7 @@
 #include <string.h>
 
 CAN_HandleTypeDef hcan1 = {CAN1, 0U}, hcan2 = {CAN2, 0U};
-typedef struct { unsigned bus; CAN_HandleTypeDef *handle; ABoxCanEvents events; ABoxCanFrame rx; uint8_t pending; } WingCan;
+typedef struct { unsigned bus; CAN_HandleTypeDef *handle; ABoxCanEvents events; ABoxCanEventCallbacks callbacks; ABoxCanFrame rx; uint8_t pending; } WingCan;
 static WingCan ports[2] = {{.bus=0U,.handle=&hcan1},{.bus=1U,.handle=&hcan2}};
 static WingCan *port(CAN_HandleTypeDef *h) { return h == &hcan1 ? &ports[0] : h == &hcan2 ? &ports[1] : 0; }
 static void complete(void *context, uint8_t mailbox, ABoxCanTxResult result)
@@ -21,15 +21,19 @@ static void receive(void *context, const ABoxCanFrame *frame)
 }
 int WingGdCan_Init(uint32_t first_bitrate)
 {
-    const ABoxCanOptions first = {1U, 1U, 1U}, second = {1U, 0U, 1U};
-    if (!ABoxCanPort_InitWithOptions(0U, first_bitrate, ABOX_CAN_NORMAL, &first)) return 0;
-    if (!ABoxCanPort_InitWithOptions(1U, 500000U, ABOX_CAN_NORMAL, &second)) {
+    const ABoxCanConfig first = {.bitrate=first_bitrate, .segment1=15U, .segment2=2U,
+        .sync_jump_width=1U, .mode=ABOX_CAN_NORMAL, .options={1U, 1U, 1U}};
+    const ABoxCanConfig second = {.bitrate=500000U, .segment1=15U, .segment2=2U,
+        .sync_jump_width=1U, .mode=ABOX_CAN_NORMAL, .options={1U, 0U, 1U}};
+    if (!ABoxCanPort_Init(0U, &first)) return 0;
+    if (!ABoxCanPort_Init(1U, &second)) {
         (void)ABoxCanPort_Stop(0U); return 0;
     }
     for (unsigned i = 0; i < 2U; ++i) {
-        ABoxCanEventCallbacks callbacks = {0};
-        callbacks.context = &ports[i]; callbacks.receive = receive; callbacks.complete = complete;
-        if (!ABoxCanPort_BindEvents(i, &ports[i].events, &callbacks) ||
+        ports[i].callbacks = (ABoxCanEventCallbacks){0};
+        ports[i].callbacks.context = &ports[i];
+        ports[i].callbacks.receive = receive; ports[i].callbacks.complete = complete;
+        if (!ABoxCanPort_BindEvents(i, &ports[i].events, &ports[i].callbacks) ||
             !ABoxCanPort_EnableEventIrq(i, &ports[i].events)) {
             (void)ABoxCanPort_Stop(1U); (void)ABoxCanPort_Stop(0U); return 0;
         }

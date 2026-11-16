@@ -1,6 +1,6 @@
 # A-BOX 顶飞翼固件
 
-产品标识固定为 `top_flying_wing`，首版 App 为 `top-flying-wing-1.0.0`，构建脚本默认 App 版本为 `top-flying-wing-1.1.9`。Boot 已归属公共平台，冻结版本为 `abox-boot-2.3.0`。已有 `dist/` 中的实际版本以其清单为准，不能仅根据构建默认值判断。
+产品标识固定为 `top_flying_wing`，本分支默认 App 版本为 `top-flying-wing-1.1.17-st`；V1 对应 `top-flying-wing-1.1.17-gd`。两种硬件分别使用各自的公共冻结 Boot；已有 `dist/` 的实际版本以其清单为准。
 
 公共组件、完整 Boot 边界和其他产品迁移状态见 `platform/README.md`、`platform/docs/PLATFORM_CONTRACT.md`、`platform/docs/PRODUCT_MATRIX.md`。
 
@@ -11,7 +11,7 @@
 - `platform/targets/gd32f105_abox_boot/`：GD32 V1 独立 Boot；不得与 STM32 Boot 混用。
 - `docs/vendor/`：厂家 CAN/控制器资料，仅作为设备端帧依据。
 - `docs/protocols/`：按公共基础、产品业务 Profile 和内部运维接口拆分的协议文档。
-- `dist/`：仅保存最新正式版的 App、Boot、Boot State、含 State 的 Full、校验清单和烧录说明；每次正式打包成功后整体替换，不保存历史版本或诊断包。
+- `dist/`：仅保存最新正式版的 V1/V2 配对包；每次正式打包成功后整体替换，不保存历史版本或诊断包。
 
 ## MQTT 接口边界
 
@@ -31,7 +31,7 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 
 ## CAN
 
-默认 CAN2，可通过 CMake 缓存变量 `TOP_WING_CAN_BUS=1|2` 切换。两路均配置为 500 kbps；业务使用 29 位扩展帧、发送 ID `0x1`、接收 ID `0x1`、DLC 8。当前量产控制器采用同 ID 请求/应答，厂家存档说明书中的应答 ID 自动加一规则已经过时；应用层仍会校验 DLC、命令字、状态字段和结果字段。
+飞翼控制器使用 CAN2，CAN1 用于 WL300D；CAN2 固定 500 kbps，CAN1 默认 500 kbps、可构建为 250 kbps；业务使用 29 位扩展帧、发送 ID `0x1`、接收 ID `0x1`、DLC 8。当前量产控制器采用同 ID 请求/应答，厂家存档说明书中的应答 ID 自动加一规则已经过时；应用层仍会校验 DLC、命令字、状态字段和结果字段。
 
 `top-flying-wing-1.1.0` 保留 `remote_only_idle_silent` 会话模式：完全空闲时不轮询控制器；收到上升或下降请求后执行两次 `RD` 停止预检，中间保持 250 ms 静默，再读取 `RL` 限位并启动。远程运行期间才按 100 ms 周期读取反馈，普通位置样本按 200 ms、QoS 0 上报；离散状态、故障和安全停止继续使用 QoS 1。到达目标端点、反馈超时、控制器故障、运行超时或检测到控制冲突时，以单次 `ST` 收口。改变方向前，平台仍必须先明确发送 `stop` 并等待停止确认；空闲时的显式 `stop` 也执行停止确认，取得反馈后才返回成功。
 
@@ -44,34 +44,15 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 ## 构建与验证
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build_release.ps1
-python .\tools\verify_release.py .\dist --version top-flying-wing-1.1.9
-python .\tests\test_release_package.py
 powershell -ExecutionPolicy Bypass -File .\tools\test_host.ps1
-powershell -ExecutionPolicy Bypass -File .\tools\test_v4.ps1 -ServiceRoot F:\work\device-ota-service
-python .\tools\test_boot_v2_contract.py
+python .\tools\build_paired_release.py --version top-flying-wing-1.1.17-st --candidate build/candidate-pair
+powershell -ExecutionPolicy Bypass -File .\tools\build_release.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\test_v4.ps1 -ServiceRoot D:\work\device-ota-service
 ```
 
-正式包按照 `dist/README_FLASH.md` 操作：将 `TopFlyingWing_Full.bin` 加载到 `0x08000000`，仅擦写文件覆盖的页并校验，保留 `0x0803F800` 配置页，不执行整片擦除。Full 已含匹配的 State A/B 区域。
+候选目录必须是 `dist/` 之外的新目录，候选不能作为正式发布或 OTA 版本。正式打包要求产品和平台工作区干净且子模块与提交一致，分别构建 V1/GD32 和 V2/STM32 App，检查各自的冻结 Boot、版本及 MCU 标记，全部通过后将 `dist/` 整体替换为 `v1/` 与 `v2/` 配对包。发布前应确认版本未在 OTA 仓库使用。
 
-`flash_full_jlink.ps1` 是旧式不含 State 的 Full 调试工具，不支持当前正式整包；不要将当前 Full 传给该脚本。
-
-需要分别烧录 Full 和 Boot State 时，可先生成 `TopFlyingWing_BootState.bin`：
-
-```powershell
-python .\tools\make_bootstate.py `
-  --app .\build\app\TopFlyingWing_App.bin `
-  --output .\build\app\TopFlyingWing_BootState.bin `
-  --version top-flying-wing-1.1.9
-```
-
-Boot State 固定烧录到 `0x0803E800`，总长 4 KiB，不能烧到 `0x08000000`。
-
-上述脚本默认构建 `top-flying-wing-1.1.9`，编译缓存复用 `build/app/` 和 `build/host/`。日常发布只构建 App，并使用平台中已校验的固定 `ABox_Boot.bin` 及本次 App 生成匹配 Boot State，合成为维修用 Full 包。打包先生成完整临时制品，通过 `verify_release.py` 后整体替换仓库根目录的 `dist/`，因此其中始终只保留本次最新正式版。历史不可变版本由 OTA 发布仓库保存，不在产品 `dist/` 中累计。只有变更公共 Boot ABI 或同一硬件基线时，才在平台目标内单独执行 `tools/build_release.ps1`。
-
-App 烧录地址为 `0x08008000`，Boot/Full 为 `0x08000000`。正式 Full 长度固定为 260096 字节，包含 Boot、App 和匹配的 State A/B 区域，末地址为 `0x0803F7FF`，不包含配置页。冻结范围和实物验收门槛见 [Boot 冻结约定](docs/BOOT_FREEZE_CONTRACT.md)。
-
-通过调试器直接覆盖 App 时，若保留的 Boot State 仍记录旧镜像长度和 CRC，Boot 会拒绝启动新 App。必须同步写入由本次 App 生成的匹配 Boot State（`0x0803E800`，4 KiB，涵盖 A/B 两页），或使用上述现场烧录脚本清除两页状态后启动；不能仅凭 App 写入校验通过判断程序已运行。配置页 `0x0803F800` 不得擦除。
+每种硬件的 Full 含 Boot、App 和匹配的 Boot State A/B，覆盖到 `0x0803F7FF`，不包含配置页 `0x0803F800`。线刷时参考对应 `dist/v1/README_FLASH.md` 或 `dist/v2/README_FLASH.md`，仅擦写文件覆盖的页；Full 会覆盖配置恢复页 `0x0803E000`，须先确认没有待恢复的配置事务。旧单版 `package_release.ps1` 已停用。
 
 `test_v4.ps1` 使用平台统一预检，检查公共/产品回归以及实际固件报文、入网合同与服务端源码的兼容性。无保留要求的测试板必须使用公共整片擦除入口，从全空 MCU 配置开始入网验收；操作及存储边界见[平台内部接入流程](platform/docs/internal/new_product_onboarding.md#v4-统一预检与空板基线)。保留配置的升级、重启恢复另行验证。
 

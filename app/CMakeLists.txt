@@ -54,7 +54,7 @@ set(WL300D_CAN_BITRATE "500000" CACHE STRING "WL300D CAN1 bitrate (500000 or 250
 if(NOT WL300D_CAN_BITRATE MATCHES "^(500000|250000)$")
     message(FATAL_ERROR "WL300D_CAN_BITRATE must be 500000 or 250000")
 endif()
-set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.15-st" CACHE STRING "Top flying wing App firmware version")
+set(TOP_FLYING_WING_APP_FW_VERSION "top-flying-wing-1.1.17-st" CACHE STRING "Top flying wing App firmware version")
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
@@ -145,6 +145,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 )
 
 if(TOP_WING_GD32)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ABOX_UART_ENABLED_MASK=0x01U)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE TOP_WING_ZHONGTIAN=1)
     if(NOT TOP_FLYING_WING_APP_FW_VERSION MATCHES "-gd$")
         message(FATAL_ERROR "V1 GD32 App version must end in -gd")

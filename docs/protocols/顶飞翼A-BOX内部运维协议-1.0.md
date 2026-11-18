@@ -14,7 +14,7 @@
 
 本文档描述 OTA 平台与顶飞翼 A-BOX 固件之间已经实现的内部运维接口，包括设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA。
 
-这些接口使用 `/internal/*` Topic，只供受控运维平台使用，不属于 [A-BOX 飞翼设备业务协议 V4](https://github.com/cxh0416/abox-top-wing/blob/protocols/docs/protocols/A-BOX飞翼设备业务协议-V4.0.md) 中的公共业务接口。业务平台使用 V4 的公共入口，内部运维报文继续使用 `version="2.0"`，不得通过内部运维接口替代业务控制。
+这些接口使用 `/internal/*` Topic，只供受控运维平台使用，不属于 [A-BOX 飞翼设备业务协议 V4](https://github.com/cxh0416/abox-mqtt-contracts/blob/release/docs/protocols/A-BOX飞翼设备业务协议-V4.0.md) 中的公共业务接口。业务平台使用 V4 的公共入口，内部运维报文继续使用 `version="2.0"`，不得通过内部运维接口替代业务控制。
 
 当前固件没有格口映射、试开通道、锁板、RS485 或旧桌面上位机接口。
 
@@ -34,7 +34,7 @@
 
 A-BOX 只订阅自身精确的配置和 OTA 请求 Topic。内部响应优先于主动状态、心跳和日志发送；日志属于最低优先级的尽力上报。
 
-平台发布 `/request`、`/internal/config` 和 `/internal/ota` 请求时使用 QoS 1，A-BOX 订阅这些 Topic 时也必须请求 QoS 1；订阅端不得以 QoS 0 将端到端交付等级降级。公共请求的有效期与幂等遵循 [公共 MQTT V4](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md)；内部请求仍按第 2.4 节处理重复投递。
+平台发布 `/request`、`/internal/config` 和 `/internal/ota` 请求时使用 QoS 1，A-BOX 订阅这些 Topic 时也必须请求 QoS 1；订阅端不得以 QoS 0 将端到端交付等级降级。公共请求的有效期与幂等遵循 [公共 MQTT V4](https://github.com/cxh0416/abox-mqtt-contracts/blob/release/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md)；内部请求仍按第 2.4 节处理重复投递。
 
 ### 2.2 请求结构
 

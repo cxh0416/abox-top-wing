@@ -11,4 +11,4 @@
 
 ## V4 业务协议维护
 
-- 本产品 V4 业务协议正文统一维护在 `abox-top-wing` 仓库的 `protocols` 分支 `docs/protocols/A-BOX飞翼设备业务协议-V4.0.md`；固件分支只保留指向该正文的入口。修改接口时同步维护唯一正文，不在固件分支复制。
+- V4 业务协议正文统一维护在 [A-BOX MQTT V4 协议仓](https://github.com/cxh0416/abox-mqtt-contracts)，固件分支保留入口。

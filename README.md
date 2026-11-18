@@ -19,7 +19,7 @@
 - 内部运维：设备信息、内存日志、受控重启、VID/MQTT 配置和 Boot V2 OTA，只供 OTA 平台使用。
 - 不支持：格口映射、试开通道、锁板、RS485 和旧桌面上位机协议。
 
-V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh0416/abox-platform/blob/main/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md) 和 [A-BOX 飞翼设备业务协议 V4](https://github.com/cxh0416/abox-top-wing/blob/protocols/docs/protocols/A-BOX飞翼设备业务协议-V4.0.md)，采用单实例 `wing 1.0` 和 `device_power 1.0`，定义升降、停止、上下电、完整状态和位置采样。
+V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh0416/abox-mqtt-contracts/blob/release/docs/protocols/A-BOX设备公共MQTT协议-V4.0.md) 和 [A-BOX 飞翼设备业务协议 V4](https://github.com/cxh0416/abox-mqtt-contracts/blob/release/docs/protocols/A-BOX飞翼设备业务协议-V4.0.md)，采用单实例 `wing 1.0` 和 `device_power 1.0`，定义升降、停止、上下电、完整状态和位置采样。
 
 `top-flying-wing-1.1.0` 使用公共 V4；旧 V3 报文和旧控制 Topic 不再作为本构建的业务入口。现有 V3 设备继续按 [飞翼业务 V3](docs/protocols/A-BOX飞翼设备业务协议-V3.0.md) 对接，平台按实际心跳的 `version` 区分。
 
@@ -39,7 +39,7 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 
 首次检出后，在仓库根目录执行 `git submodule update --init --recursive`，取得本产品已固定提交的 [A-BOX 公共平台](https://github.com/cxh0416/abox-platform)。该命令不会把平台升级到最新提交；构建使用 `platform/` 中的固定版本。
 
-公共固件组件、Boot 和公共 MQTT 规则在平台仓库维护；产品业务、硬件适配及产品协议在本仓库维护。[内部协议文档中心](https://github.com/cxh0416/protocol-docs) 只同步与发布已登记协议，协议原文仍在各源仓库修改。
+公共固件组件和 Boot 在平台仓库维护；本仓库维护产品实现、CAN 和内部运维。公共 MQTT V4 与产品业务协议统一在 [A-BOX MQTT V4 协议仓](https://github.com/cxh0416/abox-mqtt-contracts) 维护，本项目引用[协议基线 `v4-2026.11.18.1`](https://github.com/cxh0416/abox-mqtt-contracts/tree/c41d04a6074c1a09df4573d741901abe730dee80)。[协议文档中心](https://github.com/cxh0416/protocol-docs) 发布已登记的协议。
 
 ## 构建与验证
 

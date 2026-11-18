@@ -41,6 +41,8 @@ V4 接口定义见 [A-BOX 设备公共 MQTT 协议 V4](https://github.com/cxh041
 
 公共固件组件和 Boot 在平台仓库维护；本仓库维护产品实现、CAN 和内部运维。公共 MQTT V4 与产品业务协议统一在 [A-BOX MQTT V4 协议仓](https://github.com/cxh0416/abox-mqtt-contracts) 维护，本项目引用[协议基线 `v4-2026.11.18.1`](https://github.com/cxh0416/abox-mqtt-contracts/tree/c41d04a6074c1a09df4573d741901abe730dee80)。[协议文档中心](https://github.com/cxh0416/protocol-docs) 发布已登记的协议。
 
+协议文档测试默认从同级目录的协议仓检出读取固定版本。协议仓位于其他目录时，设置 `ABOX_PROTOCOL_REPO` 指向其 Git 工作树。
+
 ## 构建与验证
 
 ```powershell

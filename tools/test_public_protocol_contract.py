@@ -2,27 +2,29 @@
 from __future__ import annotations
 import json
 import re
+import os
 from pathlib import Path
+import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
 
 def product_protocol():
-    """Read the shared protocol ref; fetch origin/protocols when updating it."""
-    import subprocess
     path = "docs/protocols/A-BOX飞翼设备业务协议-V4.0.md"
-    branch = subprocess.check_output(["git", "-C", str(ROOT), "branch", "--show-current"], text=True).strip()
-    if branch == "protocols":
-        return (ROOT / path).read_text(encoding="utf-8")
+    checkout = Path(os.environ.get("ABOX_PROTOCOL_REPO", ROOT.parent / "ABox_MQTT_Contracts"))
+    ref = os.environ.get("ABOX_PROTOCOL_REF", "v4-2026.11.18.1")
     try:
-        raw = subprocess.check_output(["git", "-C", str(ROOT), "show", "refs/remotes/origin/protocols:" + path], stderr=subprocess.PIPE)
+        return subprocess.check_output(
+            ["git", "-C", str(checkout), "show", f"{ref}:{path}"], stderr=subprocess.PIPE,
+        ).decode("utf-8")
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError("Run git fetch origin protocols:refs/remotes/origin/protocols to obtain the shared protocol") from exc
-    return raw.decode("utf-8")
+        raise RuntimeError(
+            f"Cannot read {path} at {ref} from {checkout}. "
+            "Clone abox-mqtt-contracts or set ABOX_PROTOCOL_REPO to its checkout."
+        ) from exc
 
 
 def main() -> None:
-    path = ROOT / "docs/protocols/A-BOX飞翼设备业务协议-V4.0.md"
     text = product_protocol()
     blocks = re.findall(r"```json\s*(.*?)\s*```", text, re.S)
     assert blocks, "no public V4 examples"

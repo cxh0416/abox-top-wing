@@ -1,24 +1,23 @@
 #include "mqtt_v4.h"
 #include "mqtt_v4_report_internal.h"
 
-#include <stdio.h>
 #include <string.h>
 #include "abox_cloud_v4.h"
 #include "abox_mqtt_request.h"
 #include "abox_cloud_service.h"
-#include "abox_mqtt_digest.h"
 #include "abox_platform_port.h"
 #include "app_version.h"
 #include "main.h"
 #include "mqtt_app_int.h"
 #include "mqtt_core.h"
+#include "mqtt_v4_reply.h"
 #include "mqtt_v4_store.h"
 #include "time_base.h"
 #include "wing_power.h"
 
 #define CACHE_COUNT 12U
 #define ORDINARY_CACHE_COUNT (CACHE_COUNT - 1U)
-typedef enum { POWER_NONE, POWER_ON, POWER_OFF } PowerAction;
+_Static_assert(MQTT_V4_IDEM_COUNT <= (unsigned)INT8_MAX + 1U, "V4 request slot index");
 typedef struct
 {
     char id[65];
@@ -86,35 +85,17 @@ void MQTT_V4_IdentityChanged(const char* id)
     while (WingController_TakeResult(&old_result)) { }
 }
 
-static const char* message(uint16_t code)
-{
-    switch (code)
-    {
-        case 200U: return "operation accepted";
-        case 4001U: return "invalid request";
-        case 4002U: return "unsupported command";
-        case 4003U: return "busy or trusted time unavailable";
-        case 4005U: return "request expired";
-        case 4006U: return "requestId conflict";
-        case 5002U: return "controller unavailable";
-        case 5003U: return "controller feedback not confirmed";
-        case 5004U: return "controller rejected command";
-        case 5005U: return "controller fault";
-        default: return "internal error";
-    }
-}
-
 static int encode_response(const char* id, uint16_t code, uint64_t timestamp, uint8_t sync, PowerAction power)
 {
-    cJSON* result = sync && code == 200U ? cJSON_Parse("{\"expectedStates\":[{\"reportName\":\"wing_status\"},{\"reportName\":\"power_status\"}]}") : NULL;
-    if (code == 200U && power != POWER_NONE)
+    if (!sync || code != 200U)
     {
-        result = cJSON_CreateObject();
-        if (result && !cJSON_AddBoolToObject(result, "powerOutputOn", power == POWER_ON))
-        { cJSON_Delete(result); result = NULL; }
+        const MqttV4Reply reply = {timestamp, code, power};
+        return MQTT_V4_ReplyEncode(response_buf, sizeof(response_buf), id, &reply);
     }
-    if (code == 200U && (sync || power != POWER_NONE) && !result) return 0;
-    uint16_t encoded = ABoxCloudV4_Response(response_buf, sizeof(response_buf), timestamp, id, code, message(code), result);
+    cJSON* result = cJSON_Parse("{\"expectedStates\":[{\"reportName\":\"wing_status\"},{\"reportName\":\"power_status\"}]}");
+    if (!result) return 0;
+    uint16_t encoded = ABoxCloudV4_Response(response_buf, sizeof(response_buf), timestamp, id, code,
+                                           MQTT_V4_ReplyMessage(code), result);
     cJSON_Delete(result);
     return encoded == code;
 }
@@ -124,13 +105,12 @@ static uint8_t respond(const char* id, uint16_t code, uint64_t timestamp, uint8_
     return encode_response(id, code, timestamp, sync, power) && MQTT_App_QueuePublicResponse(response_buf, id, code);
 }
 
-static void replay_response(const char* response, const char* id)
+static int replay_response(const char* record, size_t length, const char* id)
 {
-    cJSON* root = ABoxMqttDigest_Parse(response, strlen(response));
-    const cJSON* code = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "data"), "code");
-    if (cJSON_IsNumber(code) && code->valuedouble > 0 && code->valuedouble <= UINT16_MAX)
-        (void)MQTT_App_QueuePublicResponse(response, id, (uint16_t)code->valuedouble);
-    cJSON_Delete(root);
+    MqttV4Reply reply;
+    return MQTT_V4_ReplyUnpack(&reply, record, length) &&
+           MQTT_V4_ReplyEncode(response_buf, sizeof(response_buf), id, &reply) &&
+           MQTT_App_QueuePublicResponse(response_buf, id, reply.code);
 }
 
 static Request* find(const char* id)
@@ -234,11 +214,14 @@ void MQTT_V4_Task(void)
         {
             if (cache->entries[index].state == ABOX_IDEM_PREPARED || cache->entries[index].state == ABOX_IDEM_DISPATCHED)
             {
-                if (encode_response(r->id, r->code, r->timestamp, 0U, r->power))
-                    (void)ABoxMqttIdem_Complete(cache, index, response_buf, strlen(response_buf));
+                const MqttV4Reply reply = {r->timestamp, r->code, r->power};
+                char record[MQTT_V4_REPLY_CAPACITY];
+                if (MQTT_V4_ReplyPack(record, &reply))
+                    (void)ABoxMqttIdem_Complete(cache, index, record, MQTT_V4_REPLY_LENGTH);
             }
-            const char* response = ABoxMqttIdem_Response(cache, index, NULL);
-            if (response && (strcmp(r->device_id, g_mqtt_app_device_id) || MQTT_App_QueuePublicResponse(response, r->id, r->code)))
+            size_t length;
+            const char* record = ABoxMqttIdem_Response(cache, index, &length);
+            if (record && (strcmp(r->device_id, g_mqtt_app_device_id) || replay_response(record, length, r->id)))
             { r->completing = r->inflight = r->valid = 0U; }
         }
     }
@@ -316,12 +299,12 @@ void MQTT_V4_HandleRequest(const char* text)
     if (match == ABOX_IDEM_CONFLICT) { code = 4006U; goto error; }
     if (match == ABOX_IDEM_REPLAY)
     {
-        const char* response = ABoxMqttIdem_Response(cache, index, NULL);
-        /* Release the request tree before reading response metadata. The
-         * response itself is queued byte-for-byte, without re-encoding. */
+        size_t length = 0U;
+        const char* record = ABoxMqttIdem_Response(cache, index, &length);
+        /* Release the request tree before rebuilding the saved reply. */
         strcpy(key, request.request_id);
         ABoxMqttRequest_Close(&request);
-        replay_response(response, key);
+        (void)replay_response(record, length, key);
         goto done;
     }
     if (match == ABOX_IDEM_WAIT)

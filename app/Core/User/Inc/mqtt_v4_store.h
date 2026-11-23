@@ -4,9 +4,9 @@
 #include <stdint.h>
 #include "abox_mqtt_idempotency.h"
 
-#define MQTT_V4_IDEM_COUNT 9U
-#define MQTT_V4_IDEM_RESPONSE_SIZE 256U
-#define MQTT_V4_IDEM_WORKSPACE_SIZE (60U + MQTT_V4_IDEM_COUNT * (108U + MQTT_V4_IDEM_RESPONSE_SIZE))
+#define MQTT_V4_IDEM_COUNT 24U
+/* Keep the existing A4J1 file length, including the extra EOF probe byte. */
+#define MQTT_V4_IDEM_WORKSPACE_SIZE (60U + 9U * (108U + 256U))
 
 /* Shared UFS engine. The product only supplies resources and the namespace. */
 ABoxMqttIdempotency* MQTT_V4_Store(void);
